@@ -1,11 +1,8 @@
 [package]
-name = "eframe_template"
-version = "0.1.0"
-authors = ["Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"]
+name = "mc_nbt_viewer"
+version = "0.0.1"
 edition = "2024"
-license = "MIT OR Apache-2.0"
-include = ["LICENSE-APACHE", "LICENSE-MIT", "**/*.rs", "Cargo.toml"]
-rust-version = "1.92"
+repository = "https://github.com/sheepdotcom/mc-nbt-viewer"
 
 [package.metadata.docs.rs]
 all-features = true
@@ -18,6 +15,7 @@ log = "0.4.27"
 
 # You only need serde if you want app persistence:
 serde = { version = "1.0.219", features = ["derive"] }
+flate2 = "1.1.9"
 
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
