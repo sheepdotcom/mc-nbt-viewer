@@ -12,19 +12,23 @@ targets = ["x86_64-unknown-linux-gnu", "wasm32-unknown-unknown"]
 egui = "0.34.1"
 eframe = { version = "0.34.1", features = ["persistence"] }
 log = "0.4.27"
+flate2 = "1.1.9"
+rfd = "0.17.2"
 
 # You only need serde if you want app persistence:
 serde = { version = "1.0.219", features = ["derive"] }
-flate2 = "1.1.9"
 
 # native:
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 env_logger = "0.11.8"
+poll-promise = { version = "0.3.0", features = ["tokio"] }
+tokio = "1.52.3"
 
 # web:
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen-futures = "0.4.50"
 web-sys = "0.3.70"              # to access the DOM (to hide the loading text)
+poll-promise = { version = "0.3.0", features = ["web"] }
 
 [profile.release]
 opt-level = 2 # fast and small wasm
