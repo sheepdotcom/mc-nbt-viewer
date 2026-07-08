@@ -1,29 +1,22 @@
+use std::io::Cursor;
+
 use poll_promise::Promise;
 
-use crate::decompress_file;
+use crate::{decompress_file, nbt::RootTag, parse_nbt_file};
 
 // https://github.com/c-git/egui_file_picker_poll_promise - example used for this, is also why the types are named this way
-type SaveLoadReturn = Option<Vec<u8>>;
-type SaveLoadPromise = Option<Promise<SaveLoadReturn>>;
+type SaveLoadReturn = Option<Cursor<Vec<u8>>>;
+type SaveLoadPromise = Promise<SaveLoadReturn>;
 
 /// We derive Deserialize/Serialize so we can persist app state on shutdown.
-#[derive(serde::Deserialize, serde::Serialize)]
+#[derive(Default, serde::Deserialize, serde::Serialize)]
 #[serde(default)] // if we add new fields, give them default values when deserializing old state
 pub struct App {
     #[serde(skip)]
-    gz_loaded: bool, // temp value will be removed very soon
+    root_tag: Option<RootTag>, // new temp value will be removed soon
 
     #[serde(skip)] // This how you opt-out of serialization of a field
-    save_load_promise: SaveLoadPromise,
-}
-
-impl Default for App {
-    fn default() -> Self {
-        Self {
-            gz_loaded: false,
-            save_load_promise: None,
-        }
-    }
+    save_load_promise: Option<SaveLoadPromise>,
 }
 
 impl App {
@@ -48,17 +41,22 @@ impl eframe::App for App {
         eframe::set_value(storage, eframe::APP_KEY, self);
     }
 
-    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        if let Some(promise) = &self.save_load_promise {
-            if promise.ready().is_some() {
-                let mut temp = None;
-                std::mem::swap(&mut temp, &mut self.save_load_promise);
+    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let Some(promise) = &self.save_load_promise && promise.ready().is_some() {
+            let mut temp = None;
+            std::mem::swap(&mut temp, &mut self.save_load_promise);
 
-                let maybe_data = temp.expect("Promise was in a state of ready and not ready at the same time.").block_and_take();
+            let maybe_data = temp.expect("Promise was in a state of ready and not ready at the same time.").block_and_take();
 
-                if let Some(data) = maybe_data {
-                    // TODO: put through nbt decoding or whatever
-                    self.gz_loaded = decompress_file(data).is_ok();
+            if let Some(data) = maybe_data {
+                let root_tag = match decompress_file(data) {
+                    Ok(mut v) => parse_nbt_file(&mut v),
+                    Err(mut data) => parse_nbt_file(&mut data),
+                };
+
+                match root_tag {
+                    Ok(v) => self.root_tag = Some(v),
+                    Err(err) => println!("NBT Parse Error: {err}"),
                 }
             }
         }
@@ -77,21 +75,19 @@ impl eframe::App for App {
                     if ui.add_enabled(self.save_load_promise.is_none(), egui::Button::new("Open")).clicked() {
                         let ctx = ui.ctx().clone();
                         
-                        self.save_load_promise = execute(async move {
+                        self.save_load_promise = Some(execute(async move {
                             let file = rfd::AsyncFileDialog::new().pick_file().await?;
-                            let data = file.read().await;
+                            let data = Cursor::new(file.read().await);
 
                             ctx.request_repaint();
 
                             Some(data)
-                        });
+                        }));
                     }
                     
                     // NOTE: no File->Quit on web pages!
-                    if !cfg!(target_arch = "wasm32") {
-                        if ui.button("Quit").clicked() {
-                            ui.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
+                    if !cfg!(target_arch = "wasm32") && ui.button("Quit").clicked() {
+                        ui.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
 
@@ -105,7 +101,9 @@ impl eframe::App for App {
             // The central panel the region left after adding TopPanel's and SidePanel's
             ui.heading("MC NBT Viewer (WIP)");
             
-            ui.label(self.gz_loaded.to_string());
+            if let Some(v) = &self.root_tag {
+                ui.label(v.to_string());
+            }
 
             ui.add(egui::github_link_file!(
                 "https://github.com/sheepdotcom/mc-nbt-viewer/blob/main/",
@@ -136,10 +134,10 @@ fn powered_by_egui_and_eframe(ui: &mut egui::Ui) {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn execute<F: std::future::Future<Output = SaveLoadReturn> + Send + 'static>(f: F) -> SaveLoadPromise {
-    Some(Promise::spawn_async(f))
+    Promise::spawn_async(f)
 }
 
 #[cfg(target_arch = "wasm32")]
 fn execute<F: std::future::Future<Output = SaveLoadReturn> + 'static>(f: F) -> SaveLoadPromise {
-    Some(Promise::spawn_local(f))
+    Promise::spawn_local(f)
 }

@@ -1,18 +1,31 @@
 #![warn(clippy::all, rust_2018_idioms)]
 
 mod app;
-use std::io::{self, Read};
-
 pub use app::App;
-use flate2::read::GzDecoder;
 
-pub fn decompress_file(data: Vec<u8>) -> io::Result<Vec<u8>> {
-    let mut gz = GzDecoder::new(&data[..]);
-    let mut v = Vec::new();
-    gz.read_to_end(&mut v)?;
-    Ok(v)
+mod nbt;
+
+use std::io::{self, BufRead, Read};
+use flate2::bufread::GzDecoder;
+
+use nbt::RootTag;
+
+/// Tries to read a gzip file from a `BufRead`, if it is not valid gzip, returns the `BufRead`
+///
+/// # Errors
+///
+/// This function will return an error if the provided data does not have a valid gzip header.
+pub fn decompress_file<R: BufRead>(data: R) -> Result<GzDecoder<R>, R> {
+    let gz = GzDecoder::new(data);
+
+    if gz.header().is_some() { Ok(gz) } else { Err(gz.into_inner()) }
 }
 
-pub fn parse_nbt(data: Vec<u8>) {
-    todo!()
+/// Parses an nbt file, from any type that implements `BufRead`.
+///
+/// # Errors
+///
+/// This function will return an error if the provided nbt data is invalid.
+pub fn parse_nbt_file<R: Read>(data: &mut R) -> io::Result<RootTag> {
+    RootTag::from_raw(data)
 }

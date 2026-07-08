@@ -1,0 +1,337 @@
+use std::{collections::BTreeMap, fmt::Display, io::{self, Read}};
+
+use byteorder_lite::{BigEndian, ReadBytesExt};
+
+// the nbt crates i find don't feel like they fit me, so im writing my own nbt parser and you can't stop me
+// raw nbt -> nbt enum -> json or any other type maybe
+
+// just for readability, so i can easily know what tag without having to use a lookup table
+const TAG_END: u8 = 0x00;
+const TAG_BYTE: u8 = 0x01;
+const TAG_SHORT: u8 = 0x02;
+const TAG_INT: u8 = 0x03;
+const TAG_LONG: u8 = 0x04;
+const TAG_FLOAT: u8 = 0x05;
+const TAG_DOUBLE: u8 = 0x06;
+const TAG_BYTE_ARRAY: u8 = 0x07;
+const TAG_STRING: u8 = 0x08;
+const TAG_LIST: u8 = 0x09;
+const TAG_COMPOUND: u8 = 0x0A;
+const TAG_INT_ARRAY: u8 = 0x0B;
+const TAG_LONG_ARRAY: u8 = 0x0C;
+
+// mainly used for the root tag, as it can have a name
+#[derive(Clone, Debug)]
+pub struct RootTag {
+    name: String,
+    data: TagData,
+}
+
+impl Display for RootTag { // temp display thing for now, later ill make a trait for types that can convert to SNBT
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.name.is_empty() {
+            self.data.fmt(f)
+        } else {
+            TagData::write_string(f, &self.name)?;
+            write!(f, ": {}", self.data)
+        }
+    }
+}
+
+impl RootTag {
+    pub fn from_raw<R: Read>(data: &mut R) -> io::Result<Self> {
+        if let Some((name, data)) = Self::read_tag(data)? {
+            Ok(Self { name, data })
+        } else {
+            Err(io::Error::other("Invalid tag type TAG_END found"))
+        }
+    }
+
+    pub fn get_name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn get_name_mut(&mut self) -> &mut str {
+        &mut self.name
+    }
+
+    pub fn set_name(&mut self, name: String) {
+        self.name = name;
+    }
+
+    pub fn get_tag(&self) -> u8 {
+        self.data.get_tag()
+    }
+
+    pub fn set_tag(&mut self, tag: u8) {
+        self.data.set_tag(tag);
+    }
+
+    pub fn get_tag_name(&self) -> &str {
+        self.data.get_tag_name()
+    }
+
+    /// The `Option` is only there for something else, all it means is that the tag type was `TAG_END`
+    fn read_tag<R: Read>(data: &mut R) -> io::Result<Option<(String, TagData)>> {
+        let tag = data.read_u8()?;
+
+        if tag == TAG_END {
+            return Ok(None);
+        }
+
+        let name = Self::read_string(data)?;
+
+        let payload = Self::read_payload(data, tag)?;
+
+        Ok(Some((name, (tag, payload).into())))
+    }
+
+    fn read_payload<R: Read>(data: &mut R, tag: u8) -> io::Result<Payload> {
+        Ok(match tag {
+            TAG_BYTE => Payload::Byte(data.read_i8()?),
+            TAG_SHORT => Payload::Short(data.read_i16::<BigEndian>()?),
+            TAG_INT => Payload::Int(data.read_i32::<BigEndian>()?),
+            TAG_LONG => Payload::Long(data.read_i64::<BigEndian>()?),
+            TAG_FLOAT => Payload::Float(data.read_f32::<BigEndian>()?),
+            TAG_DOUBLE => Payload::Double(data.read_f64::<BigEndian>()?),
+            TAG_BYTE_ARRAY => Payload::ByteArray(Self::read_array(data, ReadBytesExt::read_i8)?),
+            TAG_STRING => Payload::String(Self::read_string(data)?),
+            TAG_LIST => { // this shit is such a mess
+                match data.read_u8()? { // tag ID of the list's contents
+                    TAG_END => Payload::EmptyArray,
+                    TAG_BYTE => Payload::ByteArray(Self::read_array(data, ReadBytesExt::read_i8)?),
+                    TAG_SHORT => Payload::ShortArray(Self::read_array(data, ReadBytesExt::read_i16::<BigEndian>)?),
+                    TAG_INT => Payload::IntArray(Self::read_array(data, ReadBytesExt::read_i32::<BigEndian>)?),
+                    TAG_LONG => Payload::LongArray(Self::read_array(data, ReadBytesExt::read_i64::<BigEndian>)?),
+                    TAG_FLOAT => Payload::FloatArray(Self::read_array(data, ReadBytesExt::read_f32::<BigEndian>)?),
+                    TAG_DOUBLE => Payload::DoubleArray(Self::read_array(data, ReadBytesExt::read_f64::<BigEndian>)?),
+                    TAG_STRING => Payload::StringArray(Self::read_array(data, Self::read_string)?),
+                    list_tag => Payload::GenericArray(Self::read_array(data, |r| Self::read_payload(r, list_tag))?, list_tag),
+                }
+            },
+            TAG_COMPOUND => {
+                let mut map = BTreeMap::new();
+
+                while let Some((name, data)) = Self::read_tag(data)? {
+                    map.insert(name, data);
+                }
+
+                Payload::Compound(map)
+            },
+            TAG_INT_ARRAY => Payload::IntArray(Self::read_array(data, ReadBytesExt::read_i32::<BigEndian>)?),
+            TAG_LONG_ARRAY => Payload::LongArray(Self::read_array(data, ReadBytesExt::read_i64::<BigEndian>)?),
+            v => return Err(io::Error::other(format!("Invalid tag type {v:#02X} found"))),
+        })
+    }
+
+    fn read_string<R: Read>(data: &mut R) -> io::Result<String> {
+        let len = data.read_u16::<BigEndian>()?;
+
+        if len > 0 {
+            let mut buf = vec![0u8; len as usize];
+            data.read_exact(&mut buf)?;
+            Ok(String::from_utf8_lossy(&buf).to_string())
+        } else {
+            Ok(String::new())
+        }
+    }
+
+    /// This method is absolutely stupid, but at least it allows for arrays of any number and string to be parsed,
+    /// without me having to make like 7 different functions for each one with almost the exact same code in each.
+    ///
+    /// Doing it this way also feels better because the other way I can think of is a macro and I don't wanna make a macro.
+    fn read_array<R: Read, F: Fn(&mut R) -> io::Result<T>, T>(data: &mut R, f: F) -> io::Result<Vec<T>> {
+        let len = data.read_u32::<BigEndian>()? as usize;
+
+        let mut array = Vec::with_capacity(len);
+
+        for _ in 0..len {
+            array.push(f(data)?);
+        }
+
+        Ok(array)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct TagData {
+    tag: u8, // store the original tag it was (mainly so byte array and list of byte can be differentiated)
+    payload: Payload,
+}
+
+impl Display for TagData {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        Self::fmt_with_custom_data(f, &self.payload, self.tag)
+    }
+}
+
+impl From<(u8, Payload)> for TagData {
+    fn from(value: (u8, Payload)) -> Self {
+        Self { tag: value.0, payload: value.1 }
+    }
+}
+
+impl TagData {
+    pub fn get_tag(&self) -> u8 {
+        self.tag
+    }
+
+    pub fn set_tag(&mut self, tag: u8) {
+        if tag > TAG_END && tag <= TAG_LONG_ARRAY {
+            self.tag = tag;
+        }
+    }
+    
+    pub fn get_tag_name(&self) -> &str {
+        match self.tag {
+            TAG_END => "End",
+            TAG_BYTE => "Byte",
+            TAG_SHORT => "Short",
+            TAG_INT => "Int",
+            TAG_LONG => "Long",
+            TAG_FLOAT => "Float",
+            TAG_DOUBLE => "Double",
+            TAG_BYTE_ARRAY => "Byte Array",
+            TAG_STRING => "String",
+            TAG_LIST => "List",
+            TAG_COMPOUND => "Compound",
+            TAG_INT_ARRAY => "Int Array",
+            TAG_LONG_ARRAY => "Long Array",
+            _ => "Unknown"
+        }
+    }
+
+    fn fmt_with_custom_data(f: &mut std::fmt::Formatter<'_>, payload: &Payload, tag: u8) -> std::fmt::Result {
+        match payload {
+            Payload::Byte(v) => Self::write_byte(f, v),
+            Payload::Short(v) => Self::write_short(f, v),
+            Payload::Int(v) => Self::write_int(f, v),
+            Payload::Long(v) => Self::write_long(f, v),
+            Payload::Float(v) => Self::write_float(f, v),
+            Payload::Double(v) => Self::write_double(f, v),
+            Payload::String(v) => Self::write_string(f, v),
+            Payload::EmptyArray => write!(f, "[]"),
+            Payload::ByteArray(arr) => {
+                if tag != TAG_LIST {
+                    f.write_str("[B;")?;
+                    Self::write_array_inner(f, arr, Self::write_byte)?;
+                    f.write_str("]")
+                } else {
+                    Self::write_array(f, arr, Self::write_byte)
+                }
+            },
+            Payload::ShortArray(arr) => Self::write_array(f, arr, Self::write_short),
+            Payload::IntArray(arr) => {
+                if tag != TAG_LIST {
+                    f.write_str("[I;")?;
+                    Self::write_array_inner(f, arr, Self::write_int)?;
+                    f.write_str("]")
+                } else {
+                    Self::write_array(f, arr, Self::write_int)
+                }
+            },
+            Payload::LongArray(arr) => {
+                if tag != TAG_LIST {
+                    f.write_str("[L;")?;
+                    Self::write_array_inner(f, arr, Self::write_long)?;
+                    f.write_str("]")
+                } else {
+                    Self::write_array(f, arr, Self::write_long)
+                }
+            },
+            Payload::FloatArray(arr) => Self::write_array(f, arr, Self::write_float),
+            Payload::DoubleArray(arr) => Self::write_array(f, arr, Self::write_double),
+            Payload::StringArray(arr) => Self::write_array(f, arr, Self::write_string),
+            Payload::GenericArray(arr, list_tag) => Self::write_array(f, arr, |f, v| {
+                Self::fmt_with_custom_data(f, v, *list_tag)
+            }),
+            Payload::Compound(map) => {
+                f.write_str("{")?;
+                for (name, data) in map {
+                    Self::write_string(f, name)?;
+                    f.write_str(":")?;
+                    data.fmt(f)?;
+                }
+                f.write_str("}")
+            }
+        }
+    }
+
+    // everything below here is an absolute mess of code that works pretty well and I'm pretty sure is still going to be optimized well by the compiler, maybe
+    fn write_array<T, F: Fn(&mut std::fmt::Formatter<'_>, &T) -> std::fmt::Result>(f: &mut std::fmt::Formatter<'_>, arr: &[T], fmt: F) -> std::fmt::Result {
+        f.write_str("[")?;
+        Self::write_array_inner(f, arr, fmt)?;
+        f.write_str("]")
+    }
+
+    fn write_array_inner<T, F: Fn(&mut std::fmt::Formatter<'_>, &T) -> std::fmt::Result>(f: &mut std::fmt::Formatter<'_>, arr: &[T], fmt: F) -> std::fmt::Result {
+        let mut it = arr.iter().peekable();
+        while let Some(v) = it.next() {
+            fmt(f, v)?;
+
+            if it.peek().is_some() {
+                f.write_str(",")?;
+            }
+        }
+        Ok(())
+    }
+
+    // Most of these will probably be moved to the SNBT trait when I make that (it'll be an impl per type, one function that works on all these types and does this)
+    // Not doing it now cuz im still just testing NBT loading, SNBT is next I guess
+    fn write_byte(f: &mut std::fmt::Formatter<'_>, v: &i8) -> std::fmt::Result {
+        write!(f, "{v}b")
+    }
+
+    fn write_short(f: &mut std::fmt::Formatter<'_>, v: &i16) -> std::fmt::Result {
+        write!(f, "{v}s")
+    }
+
+    fn write_int(f: &mut std::fmt::Formatter<'_>, v: &i32) -> std::fmt::Result {
+        write!(f, "{v}")
+    }
+
+    fn write_long(f: &mut std::fmt::Formatter<'_>, v: &i64) -> std::fmt::Result {
+        write!(f, "{v}L")
+    }
+
+    fn write_float(f: &mut std::fmt::Formatter<'_>, v: &f32) -> std::fmt::Result {
+        write!(f, "{v}f")
+    }
+
+    fn write_double(f: &mut std::fmt::Formatter<'_>, v: &f64) -> std::fmt::Result {
+        write!(f, "{v}d")
+    }
+
+    // TODO: improve the output to match SNBT better
+    fn write_string(f: &mut std::fmt::Formatter<'_>, v: &String) -> std::fmt::Result {
+        write!(f, "\"{v}\"")
+    }
+}
+
+/// `TAG_List` has been split to where there is an enum variant per tag type it can hold
+/// while also being called an array because that just sounds better than calling it a list.
+/// This is mainly there to save on memory, as a `Vec<i8>` is way less than a `Vec<Payload>`,
+/// but there is still a `Vec<Payload>`, mainly for when a list holds more lists or compounds
+///
+/// And if for some reason `TAG_List` was holding `TAG_Byte`, `TAG_Int`, or `TAG_Long`,
+/// it would convert to a `TAG_Byte_Array`, `TAG_Int_Array`, or `TAG_Long_Array` respectively.
+#[derive(Clone, Debug)]
+pub enum Payload {
+    Byte(i8),
+    Short(i16),
+    Int(i32),
+    Long(i64),
+    Float(f32),
+    Double(f64),
+    String(String),
+    EmptyArray, // mainly for when TAG_List holds TAG_End (which it can do for some reason)
+    ByteArray(Vec<i8>),
+    ShortArray(Vec<i16>),
+    IntArray(Vec<i32>),
+    LongArray(Vec<i64>),
+    FloatArray(Vec<f32>),
+    DoubleArray(Vec<f64>),
+    StringArray(Vec<String>),
+    GenericArray(Vec<Self>, u8), // store the tag of the list as well cuz thats important for the generic one, the others you can infer what tag was used
+    Compound(BTreeMap<String, TagData>),
+}
