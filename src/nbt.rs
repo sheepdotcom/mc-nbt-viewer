@@ -2,23 +2,25 @@ use std::{collections::BTreeMap, fmt::Display, io::{self, Read}};
 
 use byteorder_lite::{BigEndian, ReadBytesExt};
 
+use crate::snbt::Snbt as _;
+
 // the nbt crates i find don't feel like they fit me, so im writing my own nbt parser and you can't stop me
 // raw nbt -> nbt enum -> json or any other type maybe
 
 // just for readability, so i can easily know what tag without having to use a lookup table
-const TAG_END: u8 = 0x00;
-const TAG_BYTE: u8 = 0x01;
-const TAG_SHORT: u8 = 0x02;
-const TAG_INT: u8 = 0x03;
-const TAG_LONG: u8 = 0x04;
-const TAG_FLOAT: u8 = 0x05;
-const TAG_DOUBLE: u8 = 0x06;
-const TAG_BYTE_ARRAY: u8 = 0x07;
-const TAG_STRING: u8 = 0x08;
-const TAG_LIST: u8 = 0x09;
-const TAG_COMPOUND: u8 = 0x0A;
-const TAG_INT_ARRAY: u8 = 0x0B;
-const TAG_LONG_ARRAY: u8 = 0x0C;
+pub const TAG_END: u8 = 0x00;
+pub const TAG_BYTE: u8 = 0x01;
+pub const TAG_SHORT: u8 = 0x02;
+pub const TAG_INT: u8 = 0x03;
+pub const TAG_LONG: u8 = 0x04;
+pub const TAG_FLOAT: u8 = 0x05;
+pub const TAG_DOUBLE: u8 = 0x06;
+pub const TAG_BYTE_ARRAY: u8 = 0x07;
+pub const TAG_STRING: u8 = 0x08;
+pub const TAG_LIST: u8 = 0x09;
+pub const TAG_COMPOUND: u8 = 0x0A;
+pub const TAG_INT_ARRAY: u8 = 0x0B;
+pub const TAG_LONG_ARRAY: u8 = 0x0C;
 
 // mainly used for the root tag, as it can have a name
 #[derive(Clone, Debug)]
@@ -30,15 +32,20 @@ pub struct RootTag {
 impl Display for RootTag { // temp display thing for now, later ill make a trait for types that can convert to SNBT
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.name.is_empty() {
-            self.data.fmt(f)
+            self.data.to_snbt(f)
         } else {
-            TagData::write_string(f, &self.name)?;
+            self.name.to_snbt(f)?;
             write!(f, ": {}", self.data)
         }
     }
 }
 
 impl RootTag {
+    /// Takes any type that implements `std::io::Read` and tries to parse the nbt object.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the data is not valid nbt.
     pub fn from_raw<R: Read>(data: &mut R) -> io::Result<Self> {
         if let Some((name, data)) = Self::read_tag(data)? {
             Ok(Self { name, data })
@@ -51,24 +58,16 @@ impl RootTag {
         &self.name
     }
 
-    pub fn get_name_mut(&mut self) -> &mut str {
-        &mut self.name
-    }
-
-    pub fn set_name(&mut self, name: String) {
-        self.name = name;
-    }
-
     pub fn get_tag(&self) -> u8 {
         self.data.get_tag()
     }
 
-    pub fn set_tag(&mut self, tag: u8) {
-        self.data.set_tag(tag);
-    }
-
     pub fn get_tag_name(&self) -> &str {
         self.data.get_tag_name()
+    }
+
+    pub fn get_payload(&self) -> &Payload {
+        self.data.get_payload()
     }
 
     /// The `Option` is only there for something else, all it means is that the tag type was `TAG_END`
@@ -120,7 +119,7 @@ impl RootTag {
             },
             TAG_INT_ARRAY => Payload::IntArray(Self::read_array(data, ReadBytesExt::read_i32::<BigEndian>)?),
             TAG_LONG_ARRAY => Payload::LongArray(Self::read_array(data, ReadBytesExt::read_i64::<BigEndian>)?),
-            v => return Err(io::Error::other(format!("Invalid tag type {v:#02X} found"))),
+            v => return Err(io::Error::other(format!("Invalid tag type {v:#X} found"))),
         })
     }
 
@@ -155,13 +154,13 @@ impl RootTag {
 
 #[derive(Clone, Debug)]
 pub struct TagData {
-    tag: u8, // store the original tag it was (mainly so byte array and list of byte can be differentiated)
-    payload: Payload,
+    pub(crate) tag: u8, // store the original tag it was (mainly so byte array and list of byte can be differentiated)
+    pub(crate) payload: Payload,
 }
 
 impl Display for TagData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        Self::fmt_with_custom_data(f, &self.payload, self.tag)
+        self.to_snbt(f)
     }
 }
 
@@ -174,12 +173,6 @@ impl From<(u8, Payload)> for TagData {
 impl TagData {
     pub fn get_tag(&self) -> u8 {
         self.tag
-    }
-
-    pub fn set_tag(&mut self, tag: u8) {
-        if tag > TAG_END && tag <= TAG_LONG_ARRAY {
-            self.tag = tag;
-        }
     }
     
     pub fn get_tag_name(&self) -> &str {
@@ -201,110 +194,8 @@ impl TagData {
         }
     }
 
-    fn fmt_with_custom_data(f: &mut std::fmt::Formatter<'_>, payload: &Payload, tag: u8) -> std::fmt::Result {
-        match payload {
-            Payload::Byte(v) => Self::write_byte(f, v),
-            Payload::Short(v) => Self::write_short(f, v),
-            Payload::Int(v) => Self::write_int(f, v),
-            Payload::Long(v) => Self::write_long(f, v),
-            Payload::Float(v) => Self::write_float(f, v),
-            Payload::Double(v) => Self::write_double(f, v),
-            Payload::String(v) => Self::write_string(f, v),
-            Payload::EmptyArray => write!(f, "[]"),
-            Payload::ByteArray(arr) => {
-                if tag != TAG_LIST {
-                    f.write_str("[B;")?;
-                    Self::write_array_inner(f, arr, Self::write_byte)?;
-                    f.write_str("]")
-                } else {
-                    Self::write_array(f, arr, Self::write_byte)
-                }
-            },
-            Payload::ShortArray(arr) => Self::write_array(f, arr, Self::write_short),
-            Payload::IntArray(arr) => {
-                if tag != TAG_LIST {
-                    f.write_str("[I;")?;
-                    Self::write_array_inner(f, arr, Self::write_int)?;
-                    f.write_str("]")
-                } else {
-                    Self::write_array(f, arr, Self::write_int)
-                }
-            },
-            Payload::LongArray(arr) => {
-                if tag != TAG_LIST {
-                    f.write_str("[L;")?;
-                    Self::write_array_inner(f, arr, Self::write_long)?;
-                    f.write_str("]")
-                } else {
-                    Self::write_array(f, arr, Self::write_long)
-                }
-            },
-            Payload::FloatArray(arr) => Self::write_array(f, arr, Self::write_float),
-            Payload::DoubleArray(arr) => Self::write_array(f, arr, Self::write_double),
-            Payload::StringArray(arr) => Self::write_array(f, arr, Self::write_string),
-            Payload::GenericArray(arr, list_tag) => Self::write_array(f, arr, |f, v| {
-                Self::fmt_with_custom_data(f, v, *list_tag)
-            }),
-            Payload::Compound(map) => {
-                f.write_str("{")?;
-                for (name, data) in map {
-                    Self::write_string(f, name)?;
-                    f.write_str(":")?;
-                    data.fmt(f)?;
-                }
-                f.write_str("}")
-            }
-        }
-    }
-
-    // everything below here is an absolute mess of code that works pretty well and I'm pretty sure is still going to be optimized well by the compiler, maybe
-    fn write_array<T, F: Fn(&mut std::fmt::Formatter<'_>, &T) -> std::fmt::Result>(f: &mut std::fmt::Formatter<'_>, arr: &[T], fmt: F) -> std::fmt::Result {
-        f.write_str("[")?;
-        Self::write_array_inner(f, arr, fmt)?;
-        f.write_str("]")
-    }
-
-    fn write_array_inner<T, F: Fn(&mut std::fmt::Formatter<'_>, &T) -> std::fmt::Result>(f: &mut std::fmt::Formatter<'_>, arr: &[T], fmt: F) -> std::fmt::Result {
-        let mut it = arr.iter().peekable();
-        while let Some(v) = it.next() {
-            fmt(f, v)?;
-
-            if it.peek().is_some() {
-                f.write_str(",")?;
-            }
-        }
-        Ok(())
-    }
-
-    // Most of these will probably be moved to the SNBT trait when I make that (it'll be an impl per type, one function that works on all these types and does this)
-    // Not doing it now cuz im still just testing NBT loading, SNBT is next I guess
-    fn write_byte(f: &mut std::fmt::Formatter<'_>, v: &i8) -> std::fmt::Result {
-        write!(f, "{v}b")
-    }
-
-    fn write_short(f: &mut std::fmt::Formatter<'_>, v: &i16) -> std::fmt::Result {
-        write!(f, "{v}s")
-    }
-
-    fn write_int(f: &mut std::fmt::Formatter<'_>, v: &i32) -> std::fmt::Result {
-        write!(f, "{v}")
-    }
-
-    fn write_long(f: &mut std::fmt::Formatter<'_>, v: &i64) -> std::fmt::Result {
-        write!(f, "{v}L")
-    }
-
-    fn write_float(f: &mut std::fmt::Formatter<'_>, v: &f32) -> std::fmt::Result {
-        write!(f, "{v}f")
-    }
-
-    fn write_double(f: &mut std::fmt::Formatter<'_>, v: &f64) -> std::fmt::Result {
-        write!(f, "{v}d")
-    }
-
-    // TODO: improve the output to match SNBT better
-    fn write_string(f: &mut std::fmt::Formatter<'_>, v: &String) -> std::fmt::Result {
-        write!(f, "\"{v}\"")
+    pub fn get_payload(&self) -> &Payload {
+        &self.payload
     }
 }
 

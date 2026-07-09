@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::io::{self, Cursor};
 
 use poll_promise::Promise;
 
@@ -14,6 +14,11 @@ type SaveLoadPromise = Promise<SaveLoadReturn>;
 pub struct App {
     #[serde(skip)]
     root_tag: Option<RootTag>, // new temp value will be removed soon
+
+    #[serde(skip)]
+    nbt_parsing_error_popup: bool,
+    #[serde(skip)]
+    nbt_parsing_error: Option<io::Error>,
 
     #[serde(skip)] // This how you opt-out of serialization of a field
     save_load_promise: Option<SaveLoadPromise>,
@@ -42,6 +47,10 @@ impl eframe::App for App {
     }
 
     fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.nbt_parsing_error.is_none() && self.nbt_parsing_error_popup {
+            self.nbt_parsing_error_popup = false;
+        }
+
         if let Some(promise) = &self.save_load_promise && promise.ready().is_some() {
             let mut temp = None;
             std::mem::swap(&mut temp, &mut self.save_load_promise);
@@ -56,7 +65,10 @@ impl eframe::App for App {
 
                 match root_tag {
                     Ok(v) => self.root_tag = Some(v),
-                    Err(err) => println!("NBT Parse Error: {err}"),
+                    Err(err) => {
+                        self.nbt_parsing_error_popup = true;
+                        self.nbt_parsing_error = Some(err);
+                    },
                 }
             }
         }
@@ -115,6 +127,17 @@ impl eframe::App for App {
                 egui::warn_if_debug_build(ui);
             });
         });
+
+        egui::Window::new("NBT Parsing Error")
+            .open(&mut self.nbt_parsing_error_popup)
+            .auto_sized()
+            .show(ui.ctx(), |ui| {
+                if let Some(v) = &self.nbt_parsing_error {
+                    ui.label(v.to_string());
+                } else {
+                    ui.label("Unknown");
+                }
+            });
     }
 }
 

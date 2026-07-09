@@ -4,13 +4,14 @@ mod app;
 pub use app::App;
 
 mod nbt;
+pub use nbt::RootTag;
+
+mod snbt;
 
 use std::io::{self, BufRead, Read};
 use flate2::bufread::GzDecoder;
 
-use nbt::RootTag;
-
-/// Tries to read a gzip file from a `BufRead`, if it is not valid gzip, returns the `BufRead`
+/// Tries to read a gzip file from any type implementing `std::io::BufRead`, if it is not valid gzip, returns the `BufRead`
 ///
 /// # Errors
 ///
@@ -21,7 +22,7 @@ pub fn decompress_file<R: BufRead>(data: R) -> Result<GzDecoder<R>, R> {
     if gz.header().is_some() { Ok(gz) } else { Err(gz.into_inner()) }
 }
 
-/// Parses an nbt file, from any type that implements `BufRead`.
+/// Parses an nbt file, from any type that implements `std::io::Read`.
 ///
 /// # Errors
 ///
