@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt::{self, Write}};
 
-use crate::nbt::{Payload, TAG_LIST, TagData};
+use crate::nbt::{Payload, TagData};
 
 /// Provides conversion to SNBT for certain types.
 /// Can directly convert NBT into SNBT as well.
@@ -113,15 +113,13 @@ impl Snbt for String {
 
 impl<T: Snbt> Snbt for &[T] {
     fn to_snbt<W: Write>(&self, w: &mut W) -> fmt::Result {
-        w.write_char('[')?;
-        write_array_inner(w, *self)?;
-        w.write_char(']')
+        write_array_with_prefix(w, *self, "")
     }
 }
 
 impl<T: Snbt> Snbt for Vec<T> {
     fn to_snbt<W: Write>(&self, w: &mut W) -> fmt::Result {
-        self.as_slice().to_snbt(w)
+        write_array_with_prefix(w, self, "")
     }
 }
 
@@ -140,9 +138,9 @@ impl<T: Snbt, U: Snbt> Snbt for BTreeMap<T, U> {
 }
 
 // gotta use this tuple instead of TagData so that GenericArray doesn't require a ton more code
-impl Snbt for (u8, &Payload) {
+impl Snbt for &Payload {
     fn to_snbt<W: Write>(&self, w: &mut W) -> fmt::Result {
-        match self.1 {
+        match self {
             Payload::Byte(v) => v.to_snbt(w),
             Payload::Short(v) => v.to_snbt(w),
             Payload::Int(v) => v.to_snbt(w),
@@ -150,39 +148,22 @@ impl Snbt for (u8, &Payload) {
             Payload::Float(v) => v.to_snbt(w),
             Payload::Double(v) => v.to_snbt(w),
             Payload::String(v) => v.to_snbt(w),
-            Payload::EmptyArray => write!(w, "[]"),
-            Payload::ByteArray(arr) => {
-                if self.0 != TAG_LIST {
-                    w.write_str("[B;")?;
-                    write_array_inner(w, arr)?;
-                    w.write_char(']')
-                } else {
-                    arr.to_snbt(w)
-                }
-            },
-            Payload::ShortArray(arr) => arr.to_snbt(w),
-            Payload::IntArray(arr) => {
-                if self.0 != TAG_LIST {
-                    w.write_str("[I;")?;
-                    write_array_inner(w, arr)?;
-                    w.write_char(']')
-                } else {
-                    arr.to_snbt(w)
-                }
-            },
-            Payload::LongArray(arr) => {
-                if self.0 != TAG_LIST {
-                    w.write_str("[L;")?;
-                    write_array_inner(w, arr)?;
-                    w.write_char(']')
-                } else {
-                    arr.to_snbt(w)
-                }
-            },
-            Payload::FloatArray(arr) => arr.to_snbt(w),
-            Payload::DoubleArray(arr) => arr.to_snbt(w),
-            Payload::StringArray(arr) => arr.to_snbt(w),
-            Payload::GenericArray(arr, list_tag) => arr.iter().map(|v| (*list_tag, v) ).collect::<Vec<_>>().to_snbt(w),
+            Payload::ByteArray(arr) => write_array_with_prefix(w, arr, "B;"),
+            Payload::IntArray(arr) => write_array_with_prefix(w, arr, "I;"),
+            Payload::LongArray(arr) => write_array_with_prefix(w, arr, "L;"),
+            Payload::EmptyList => write!(w, "[]"),
+            Payload::ByteList(arr) => arr.to_snbt(w),
+            Payload::ShortList(arr) => arr.to_snbt(w),
+            Payload::IntList(arr) => arr.to_snbt(w),
+            Payload::LongList(arr) => arr.to_snbt(w),
+            Payload::FloatList(arr) => arr.to_snbt(w),
+            Payload::DoubleList(arr) => arr.to_snbt(w),
+            Payload::StringList(arr) => arr.to_snbt(w),
+            Payload::ByteArrayList(arr) => write_array_with_fn(w, arr, |v, w| write_array_with_prefix(w, v, "B;")),
+            Payload::IntArrayList(arr) => write_array_with_fn(w, arr, |v, w| write_array_with_prefix(w, v, "I;")),
+            Payload::LongArrayList(arr) => write_array_with_fn(w, arr, |v, w| write_array_with_prefix(w, v, "L;")),
+            Payload::ListList(arr) => write_array_with_fn(w, arr, |v, w| v.to_snbt(w)),
+            Payload::CompoundList(arr) => arr.to_snbt(w),
             Payload::Compound(map) => map.to_snbt(w)
         }
     }
@@ -190,14 +171,27 @@ impl Snbt for (u8, &Payload) {
 
 impl Snbt for TagData {
     fn to_snbt<W: Write>(&self, w: &mut W) -> fmt::Result {
-        (self.tag, &self.payload).to_snbt(w)
+        self.payload().to_snbt(w)
     }
 }
 
-fn write_array_inner<'a, W: Write, T: Snbt + 'a, I: IntoIterator<Item = &'a T>>(w: &mut W, iter: I) -> std::fmt::Result {
+fn write_array_with_fn<'a, W: Write, T: 'a, F: Fn(&'a T, &mut W) -> std::fmt::Result, I: IntoIterator<Item = &'a T>>(w: &mut W, iter: I, f: F) -> std::fmt::Result {
+    w.write_char('[')?;
+    write_array_inner(w, iter, f)?;
+    w.write_char(']')
+}
+
+fn write_array_with_prefix<'a, W: Write, T: Snbt + 'a, I: IntoIterator<Item = &'a T>>(w: &mut W, iter: I, prefix: &str) -> std::fmt::Result {
+    w.write_char('[')?;
+    w.write_str(prefix)?;
+    write_array_inner(w, iter, Snbt::to_snbt)?;
+    w.write_char(']')
+}
+
+fn write_array_inner<'a, W: Write, T: 'a, F: Fn(&'a T, &mut W) -> std::fmt::Result, I: IntoIterator<Item = &'a T>>(w: &mut W, iter: I, f: F) -> std::fmt::Result {
     let mut it = iter.into_iter().peekable();
     while let Some(v) = it.next() {
-        v.to_snbt(w)?;
+        f(v, w)?;
 
         if it.peek().is_some() {
             w.write_char(',')?;

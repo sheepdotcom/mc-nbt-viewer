@@ -29,7 +29,7 @@ pub struct RootTag {
     data: TagData,
 }
 
-impl Display for RootTag { // temp display thing for now, later ill make a trait for types that can convert to SNBT
+impl Display for RootTag {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if self.name.is_empty() {
             self.data.to_snbt(f)
@@ -54,20 +54,20 @@ impl RootTag {
         }
     }
 
-    pub fn get_name(&self) -> &str {
+    pub fn name(&self) -> &str {
         &self.name
     }
 
-    pub fn get_tag(&self) -> u8 {
-        self.data.get_tag()
+    pub fn tag(&self) -> u8 {
+        self.data.tag()
     }
 
-    pub fn get_tag_name(&self) -> &str {
-        self.data.get_tag_name()
+    pub fn tag_name(&self) -> &str {
+        self.data.tag_name()
     }
 
-    pub fn get_payload(&self) -> &Payload {
-        self.data.get_payload()
+    pub fn payload(&self) -> &Payload {
+        self.data.payload()
     }
 
     /// The `Option` is only there for something else, all it means is that the tag type was `TAG_END`
@@ -95,28 +95,25 @@ impl RootTag {
             TAG_DOUBLE => Payload::Double(data.read_f64::<BigEndian>()?),
             TAG_BYTE_ARRAY => Payload::ByteArray(Self::read_array(data, ReadBytesExt::read_i8)?),
             TAG_STRING => Payload::String(Self::read_string(data)?),
-            TAG_LIST => { // this shit is such a mess
+            TAG_LIST => { // this shit is such a mess (update: even more of a mess)
                 match data.read_u8()? { // tag ID of the list's contents
-                    TAG_END => Payload::EmptyArray,
-                    TAG_BYTE => Payload::ByteArray(Self::read_array(data, ReadBytesExt::read_i8)?),
-                    TAG_SHORT => Payload::ShortArray(Self::read_array(data, ReadBytesExt::read_i16::<BigEndian>)?),
-                    TAG_INT => Payload::IntArray(Self::read_array(data, ReadBytesExt::read_i32::<BigEndian>)?),
-                    TAG_LONG => Payload::LongArray(Self::read_array(data, ReadBytesExt::read_i64::<BigEndian>)?),
-                    TAG_FLOAT => Payload::FloatArray(Self::read_array(data, ReadBytesExt::read_f32::<BigEndian>)?),
-                    TAG_DOUBLE => Payload::DoubleArray(Self::read_array(data, ReadBytesExt::read_f64::<BigEndian>)?),
-                    TAG_STRING => Payload::StringArray(Self::read_array(data, Self::read_string)?),
-                    list_tag => Payload::GenericArray(Self::read_array(data, |r| Self::read_payload(r, list_tag))?, list_tag),
+                    TAG_END => Payload::EmptyList,
+                    TAG_BYTE => Payload::ByteList(Self::read_array(data, ReadBytesExt::read_i8)?),
+                    TAG_SHORT => Payload::ShortList(Self::read_array(data, ReadBytesExt::read_i16::<BigEndian>)?),
+                    TAG_INT => Payload::IntList(Self::read_array(data, ReadBytesExt::read_i32::<BigEndian>)?),
+                    TAG_LONG => Payload::LongList(Self::read_array(data, ReadBytesExt::read_i64::<BigEndian>)?),
+                    TAG_FLOAT => Payload::FloatList(Self::read_array(data, ReadBytesExt::read_f32::<BigEndian>)?),
+                    TAG_DOUBLE => Payload::DoubleList(Self::read_array(data, ReadBytesExt::read_f64::<BigEndian>)?),
+                    TAG_BYTE_ARRAY => Payload::ByteArrayList(Self::read_array(data, |r| Self::read_array(r, ReadBytesExt::read_i8))?),
+                    TAG_STRING => Payload::StringList(Self::read_array(data, Self::read_string)?),
+                    TAG_LIST => Payload::ListList(Self::read_array(data, |r| Self::read_payload(r, TAG_LIST))?),
+                    TAG_COMPOUND => Payload::CompoundList(Self::read_array(data, Self::read_compound)?),
+                    TAG_INT_ARRAY => Payload::IntArrayList(Self::read_array(data, |r| Self::read_array(r, ReadBytesExt::read_i32::<BigEndian>))?),
+                    TAG_LONG_ARRAY => Payload::LongArrayList(Self::read_array(data, |r| Self::read_array(r, ReadBytesExt::read_i64::<BigEndian>))?),
+                    v => return Err(io::Error::other(format!("Invalid list tag type {v:#X} found"))),
                 }
             },
-            TAG_COMPOUND => {
-                let mut map = BTreeMap::new();
-
-                while let Some((name, data)) = Self::read_tag(data)? {
-                    map.insert(name, data);
-                }
-
-                Payload::Compound(map)
-            },
+            TAG_COMPOUND => Payload::Compound(Self::read_compound(data)?),
             TAG_INT_ARRAY => Payload::IntArray(Self::read_array(data, ReadBytesExt::read_i32::<BigEndian>)?),
             TAG_LONG_ARRAY => Payload::LongArray(Self::read_array(data, ReadBytesExt::read_i64::<BigEndian>)?),
             v => return Err(io::Error::other(format!("Invalid tag type {v:#X} found"))),
@@ -150,12 +147,22 @@ impl RootTag {
 
         Ok(array)
     }
+
+    fn read_compound<R: Read>(data: &mut R) -> io::Result<BTreeMap<String, TagData>> {
+        let mut map = BTreeMap::new();
+
+        while let Some((name, data)) = Self::read_tag(data)? {
+            map.insert(name, data);
+        }
+
+        Ok(map)
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct TagData {
-    pub(crate) tag: u8, // store the original tag it was (mainly so byte array and list of byte can be differentiated)
-    pub(crate) payload: Payload,
+    tag: u8, // store the original tag it was (mainly so byte array and list of byte can be differentiated)
+    payload: Payload,
 }
 
 impl Display for TagData {
@@ -171,11 +178,11 @@ impl From<(u8, Payload)> for TagData {
 }
 
 impl TagData {
-    pub fn get_tag(&self) -> u8 {
+    pub fn tag(&self) -> u8 {
         self.tag
     }
     
-    pub fn get_tag_name(&self) -> &str {
+    pub fn tag_name(&self) -> &str {
         match self.tag {
             TAG_END => "End",
             TAG_BYTE => "Byte",
@@ -194,7 +201,7 @@ impl TagData {
         }
     }
 
-    pub fn get_payload(&self) -> &Payload {
+    pub fn payload(&self) -> &Payload {
         &self.payload
     }
 }
@@ -203,9 +210,6 @@ impl TagData {
 /// while also being called an array because that just sounds better than calling it a list.
 /// This is mainly there to save on memory, as a `Vec<i8>` is way less than a `Vec<Payload>`,
 /// but there is still a `Vec<Payload>`, mainly for when a list holds more lists or compounds
-///
-/// And if for some reason `TAG_List` was holding `TAG_Byte`, `TAG_Int`, or `TAG_Long`,
-/// it would convert to a `TAG_Byte_Array`, `TAG_Int_Array`, or `TAG_Long_Array` respectively.
 #[derive(Clone, Debug)]
 pub enum Payload {
     Byte(i8),
@@ -215,14 +219,25 @@ pub enum Payload {
     Float(f32),
     Double(f64),
     String(String),
-    EmptyArray, // mainly for when TAG_List holds TAG_End (which it can do for some reason)
+    Compound(BTreeMap<String, TagData>),
+
+    // the basic array types nbt has, whatever
     ByteArray(Vec<i8>),
-    ShortArray(Vec<i16>),
     IntArray(Vec<i32>),
     LongArray(Vec<i64>),
-    FloatArray(Vec<f32>),
-    DoubleArray(Vec<f64>),
-    StringArray(Vec<String>),
-    GenericArray(Vec<Self>, u8), // store the tag of the list as well cuz thats important for the generic one, the others you can infer what tag was used
-    Compound(BTreeMap<String, TagData>),
+
+    // here is list, split into many different things so that i can save memory
+    EmptyList, // mainly for when TAG_List holds TAG_End (which it can do for some reason)
+    ByteList(Vec<i8>),
+    ShortList(Vec<i16>),
+    IntList(Vec<i32>),
+    LongList(Vec<i64>),
+    FloatList(Vec<f32>),
+    DoubleList(Vec<f64>),
+    StringList(Vec<String>),
+    ByteArrayList(Vec<Vec<i8>>),
+    IntArrayList(Vec<Vec<i32>>),
+    LongArrayList(Vec<Vec<i64>>),
+    ListList(Vec<Self>), // stupidest name but its a list of lists, it holds Self because otherwise there could be infinite enum variants
+    CompoundList(Vec<BTreeMap<String, TagData>>),
 }

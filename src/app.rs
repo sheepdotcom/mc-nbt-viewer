@@ -1,51 +1,33 @@
 use std::io::{self, Cursor};
 
+use egui_field_editor::EguiInspector;
 use poll_promise::Promise;
 
-use crate::{decompress_file, nbt::RootTag, parse_nbt_file};
+use crate::{decompress_file, nbt::RootTag, parse_nbt_file, tree::NbtTree};
 
 // https://github.com/c-git/egui_file_picker_poll_promise - example used for this, is also why the types are named this way
 type SaveLoadReturn = Option<Cursor<Vec<u8>>>;
 type SaveLoadPromise = Promise<SaveLoadReturn>;
 
-/// We derive Deserialize/Serialize so we can persist app state on shutdown.
-#[derive(Default, serde::Deserialize, serde::Serialize)]
-#[serde(default)] // if we add new fields, give them default values when deserializing old state
+#[derive(Default)]
 pub struct App {
-    #[serde(skip)]
-    root_tag: Option<RootTag>, // new temp value will be removed soon
+    root_tag: Option<RootTag>,
+    nbt_tree: Option<NbtTree>,
 
-    #[serde(skip)]
     nbt_parsing_error_popup: bool,
-    #[serde(skip)]
     nbt_parsing_error: Option<io::Error>,
 
-    #[serde(skip)] // This how you opt-out of serialization of a field
     save_load_promise: Option<SaveLoadPromise>,
 }
 
 impl App {
     /// Called once before the first frame.
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // This is also where you can customize the look and feel of egui using
-        // `cc.egui_ctx.set_visuals` and `cc.egui_ctx.set_fonts`.
-
-        // Load previous app state (if any).
-        // Note that you must enable the `persistence` feature for this to work.
-        if let Some(storage) = cc.storage {
-            eframe::get_value(storage, eframe::APP_KEY).unwrap_or_default()
-        } else {
-            Default::default()
-        }
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        Self::default()
     }
 }
 
 impl eframe::App for App {
-    /// Called by the framework to save state before shutdown.
-    fn save(&mut self, storage: &mut dyn eframe::Storage) {
-        eframe::set_value(storage, eframe::APP_KEY, self);
-    }
-
     fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
         if self.nbt_parsing_error.is_none() && self.nbt_parsing_error_popup {
             self.nbt_parsing_error_popup = false;
@@ -64,7 +46,10 @@ impl eframe::App for App {
                 };
 
                 match root_tag {
-                    Ok(v) => self.root_tag = Some(v),
+                    Ok(v) => {
+                        self.nbt_tree = Some(NbtTree::new(&v));
+                        self.root_tag = Some(v);
+                    },
                     Err(err) => {
                         self.nbt_parsing_error_popup = true;
                         self.nbt_parsing_error = Some(err);
@@ -79,7 +64,7 @@ impl eframe::App for App {
         // Put your widgets into a `SidePanel`, `TopBottomPanel`, `CentralPanel`, `Window` or `Area`.
         // For inspiration and more examples, go to https://emilk.github.io/egui
 
-        egui::Panel::top("top_panel").show_inside(ui, |ui| {
+        egui::Panel::top("top_panel").show(ui, |ui| {
             // The top panel is often a good place for a menu bar:
 
             egui::MenuBar::new().ui(ui, |ui| {
@@ -109,12 +94,13 @@ impl eframe::App for App {
             });
         });
 
-        egui::CentralPanel::default().show_inside(ui, |ui| {
+        egui::CentralPanel::default().show(ui, |ui| {
             // The central panel the region left after adding TopPanel's and SidePanel's
             ui.heading("MC NBT Viewer (WIP)");
             
-            if let Some(v) = &self.root_tag {
-                ui.label(v.to_string());
+            if let Some(tree) = &mut self.nbt_tree {
+                // ui.add(tree);
+                ui.add(EguiInspector::new(tree));
             }
 
             ui.add(egui::github_link_file!(

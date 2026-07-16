@@ -8,6 +8,8 @@ pub use nbt::RootTag;
 
 mod snbt;
 
+mod tree;
+
 use std::io::{self, BufRead, Read};
 use flate2::bufread::GzDecoder;
 
