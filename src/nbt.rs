@@ -22,7 +22,7 @@ pub const TAG_COMPOUND: u8 = 0x0A;
 pub const TAG_INT_ARRAY: u8 = 0x0B;
 pub const TAG_LONG_ARRAY: u8 = 0x0C;
 
-// mainly used for the root tag, as it can have a name
+/// The root tag of an nbt file, where the name is actually the file name as the root tag is supposed to have no name
 #[derive(Clone, Debug)]
 pub struct RootTag {
     name: String,
@@ -46,9 +46,9 @@ impl RootTag {
     /// # Errors
     ///
     /// This function will return an error if the data is not valid nbt.
-    pub fn from_raw<R: Read>(data: &mut R) -> io::Result<Self> {
-        if let Some((name, data)) = Self::read_tag(data)? {
-            Ok(Self { name, data })
+    pub fn from_raw<R: Read>(data: &mut R, name: impl Into<String>) -> io::Result<Self> {
+        if let Some((_, data)) = Self::read_tag(data)? {
+            Ok(Self { name: name.into(), data })
         } else {
             Err(io::Error::other("Invalid tag type TAG_END found"))
         }

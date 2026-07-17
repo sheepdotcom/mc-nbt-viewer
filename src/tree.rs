@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
-use egui::{CollapsingHeader, IdSalt, TextEdit, Widget};
-use egui_field_editor::EguiInspect;
-use either::Either;
+use egui::Widget;
+use egui_dnd::DragDropItem;
+use egui_field_editor::{EguiInspect, EguiInspector};
 
 use crate::{RootTag, nbt::{Payload, TagData}};
 
@@ -168,15 +168,282 @@ impl From<&BTreeMap<String, TagData>> for NbtLeafData {
     }
 }
 
-#[derive(Clone, Debug, EguiInspect, PartialEq)]
+/// A copy of the private `egui_field_editor::EnumeratedItem` cuz I need it for thing
+struct EnumeratedItem<T> {
+    item: T,
+    index: usize,
+    salt_id: egui::Id,
+}
+
+impl<T: EguiInspect> DragDropItem for EnumeratedItem<&mut T> {
+    fn id(&self) -> egui::Id {
+        egui::Id::new(self.salt_id.with(self.index))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct NbtLeaf {
     name: String,
-    #[inspect(hidden)] // TODO: add a custom way to edit this, so that instead of it showing as an enum, it only shows the type it should be
     data: NbtLeafData,
-    #[inspect(hidden)]
-    open: bool, // only does something on lists and compounds, as those become CollapsingHeader
-    #[inspect(hidden)]
-    id_salt: IdSalt,
+}
+
+impl EguiInspect for NbtLeaf {
+    fn inspect_with_custom_id(
+        &mut self,
+        parent_id: egui::Id,
+        _label: &str,
+        tooltip: &str,
+        label_ratio: f32,
+        read_only: bool,
+        ui: &mut egui::Ui,
+    ) -> egui::Response {
+        self.to_egui_inspect_mut(parent_id, tooltip, label_ratio, read_only, true, true, true, ui)
+    }
+}
+
+impl NbtLeaf {
+    /// This function is so insane that it produces three different clippy errors that I gotta ignore otherwise I have to refactor this a bit,
+    /// and right now I already don't like how much I have to mess with it, so I will just ignore the warnings because I have free will
+    #[expect(clippy::too_many_arguments)]
+    #[expect(clippy::too_many_lines)]
+    #[expect(clippy::fn_params_excessive_bools)]
+    pub fn to_egui_inspect_mut(
+        &mut self,
+        parent_id: egui::Id,
+        tooltip: &str,
+        label_ratio: f32,
+        read_only: bool,
+        allow_add_delete: bool,
+        editable_name: bool,
+        editable_keys: bool,
+        ui: &mut egui::Ui,
+    ) -> egui::Response {
+        let id = if parent_id == egui::Id::NULL { ui.next_auto_id() } else { parent_id.with(&self.name) };
+
+        ui.vertical(|ui| match &mut self.data {
+            NbtLeafData::Byte(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
+            NbtLeafData::Short(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
+            NbtLeafData::Int(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
+            NbtLeafData::Long(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
+            NbtLeafData::Float(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
+            NbtLeafData::Double(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
+            NbtLeafData::String(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
+            NbtLeafData::ByteArray(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
+            NbtLeafData::IntArray(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
+            NbtLeafData::LongArray(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
+            NbtLeafData::List(v) => { // copied and slightly modified inspect_with_custom_id from the implementation on Vec<T>
+                let id = if parent_id == egui::Id::NULL { ui.next_auto_id() } else { parent_id.with(&self.name) };
+                let parent_id_for_children = if parent_id == egui::Id::NULL { egui::Id::NULL } else { id };
+
+                let mut changed = false;
+
+                let collapsing_resp = egui::collapsing_header::CollapsingState::load_with_default_open(
+                    ui.ctx(),
+                    id.with("collapse"),
+                    false
+                ).show_header(ui, |ui| {
+                    if editable_name {
+                        let res = ui.text_edit_singleline(&mut self.name);
+                        res.union(ui.label(format!("[{}]", v.len())))
+                    } else {
+                        ui.label(format!("{} [{}]", self.name, v.len()))
+                    }
+                }).body(|ui| {
+                    let dnd_resp = egui_dnd::dnd(ui, id.with("dnd"))
+                        .with_animation_time(0.0)
+                        .show(
+                            v.iter_mut().enumerate().map(|(i, item)| EnumeratedItem { item, index: i, salt_id: id }),
+                            |ui, item, handle, state| {
+                                ui.horizontal(|ui| {
+                                    handle.ui(ui, |ui| {
+                                        ui.label(if state.dragged { "≡" } else { "☰" });
+                                    });
+
+                                    item.item.name = format!("Item {}", item.index);
+                                    let res = item.item.to_egui_inspect_mut(
+                                        parent_id_for_children,
+                                        tooltip,
+                                        label_ratio,
+                                        read_only,
+                                        true,
+                                        false,
+                                        true,
+                                        ui,
+                                    );
+
+                                    if res.changed() {
+                                        changed = true;
+                                    }
+                                });
+                            },
+                        );
+
+                    if dnd_resp.is_drag_finished() {
+                        dnd_resp.update_vec(v);
+                        changed = true;
+                    }
+
+                    dnd_resp
+                });
+
+                let mut res = ui.response();
+                if let Some(body_res) = collapsing_resp.2 {
+                    res = res.union(body_res.response);
+                }
+                if changed {
+                    res.mark_changed();
+                }
+                ui.add_enabled_ui(!read_only, |ui| {
+                    ui.add_space(ui.available_width() - 50.0);
+                    if ui.add(egui::Button::new("+").min_size(egui::Vec2::new(20.0, 20.0))).clicked() {
+                        let data = if let Some(inner) = v.first() {
+                            match inner.data {
+                                NbtLeafData::Byte(..) => NbtLeafData::Byte(0),
+                                NbtLeafData::Short(..) => NbtLeafData::Short(0),
+                                NbtLeafData::Int(..) => NbtLeafData::Int(0),
+                                NbtLeafData::Long(..) => NbtLeafData::Long(0),
+                                NbtLeafData::Float(..) => NbtLeafData::Float(0.0),
+                                NbtLeafData::Double(..) => NbtLeafData::Double(0.0),
+                                NbtLeafData::String(..) => NbtLeafData::String(String::default()),
+                                NbtLeafData::ByteArray(..) => NbtLeafData::ByteArray(Vec::default()),
+                                NbtLeafData::IntArray(..) => NbtLeafData::IntArray(Vec::default()),
+                                NbtLeafData::LongArray(..) => NbtLeafData::LongArray(Vec::default()),
+                                NbtLeafData::List(..) => NbtLeafData::List(Vec::default()),
+                                NbtLeafData::Compound(..) => NbtLeafData::Compound(Vec::default()),
+                            }
+                        } else {
+                            NbtLeafData::Int(0) // TODO: make it so you can pick what type to add, rather than forcing an integer on you
+                        };
+                        v.push(Self::new("name", data));
+                        changed = true;
+                    }
+                    if ui.add(egui::Button::new("-").min_size(egui::Vec2::new(20.0, 20.0))).clicked() && v.pop().is_some() {
+                        changed = true;
+                    }
+                });
+
+                if changed {
+                    res.mark_changed();
+                }
+
+                res
+            },
+            NbtLeafData::Compound(v) => { // copied and slightly modified inspect_with_custom_id from the implementation on HashMap<String, T>
+                let id = if parent_id == egui::Id::NULL { ui.next_auto_id() } else { parent_id.with(&self.name) };
+                let mut changed = false;
+                let data_len = v.len();
+                let mut add_content = |ui: &mut egui::Ui| {
+                    let mut resp = ui.response();
+
+                    for value in v.iter_mut() {
+                        let inner_res = if editable_keys && !matches!(value.data, NbtLeafData::List(..) | NbtLeafData::Compound(..)) {
+                            ui.horizontal_top(|ui| {
+                                ui.add_enabled_ui(!read_only, |ui| {
+                                    let mut te = value.name.clone();
+                                    let res = ui.add_sized([ui.available_width() * label_ratio, 0.0], egui::TextEdit::singleline(&mut te));
+
+                                    if res.changed() && te != value.name {
+                                        value.name = te.clone();
+                                        changed = true;
+                                    }
+
+                                    let value_res = ui.vertical(|ui| {
+                                        value.to_egui_inspect_mut(
+                                            id.with(&value.name),
+                                            tooltip,
+                                            0.0,
+                                            read_only,
+                                            allow_add_delete,
+                                            true,
+                                            editable_keys,
+                                            ui
+                                        )
+                                    }).inner;
+
+                                    res.union(value_res)
+                                })
+                            })
+                        } else {
+                            ui.horizontal_top(|ui| {
+                                ui.add_enabled_ui(!read_only, |ui| {
+                                    ui.vertical(|ui| {
+                                        value.to_egui_inspect_mut(
+                                            id.with(&value.name),
+                                            tooltip,
+                                            label_ratio,
+                                            read_only,
+                                            allow_add_delete,
+                                            true,
+                                            editable_keys,
+                                            ui
+                                        )
+                                    }).inner
+                                })
+                            })
+                        };
+
+                        resp = resp.union(inner_res.inner.inner);
+                    }
+
+                    resp
+                };
+
+                let mut header_resp = None;
+
+                let content_resp = if !self.name.is_empty() {
+                    let resp = egui::collapsing_header::CollapsingState::load_with_default_open(
+                        ui.ctx(),
+                        id.with("collapse"),
+                        false
+                    ).show_header(ui, |ui| {
+                        if editable_name {
+                            let res = ui.text_edit_singleline(&mut self.name);
+                            res.union(ui.label(format!("[{data_len}]")))
+                        } else {
+                            ui.label(format!("{} [{data_len}]", self.name))
+                        }
+                    }).body(add_content);
+
+                    header_resp = Some(resp.1.inner);
+                    resp.2.map(|v| v.inner)
+                } else {
+                    Some(add_content(ui))
+                };
+
+                if allow_add_delete {
+                    ui.add_enabled_ui(!read_only, |ui| {
+                        ui.horizontal_top(|ui| {
+                            ui.add_space(ui.available_width() - 50.0);
+
+                            if ui.add(egui::Button::new("+").min_size(egui::Vec2::new(20.0, 20.0))).clicked() {
+                                // TODO: make it so you can pick what type to add, rather than forcing an integer on you
+                                v.push(Self::new("name", NbtLeafData::Int(0)));
+                                changed = true;
+                            }
+
+                            if ui.add(egui::Button::new("-").min_size(egui::Vec2::new(20.0, 20.0))).clicked() && v.pop().is_some() {
+                                changed = true;
+                            }
+                        });
+                    });
+                }
+
+                let mut final_res = ui.response();
+                if let Some(body_res) = content_resp {
+                    final_res = final_res.union(body_res);
+                }
+                if let Some(head_res) = header_resp {
+                    final_res = final_res.union(head_res);
+                }
+
+                if changed {
+                    final_res.mark_changed();
+                }
+
+                final_res
+            },
+        }).inner
+    }
 }
 
 impl From<&RootTag> for NbtLeaf {
@@ -188,13 +455,10 @@ impl From<&RootTag> for NbtLeaf {
 impl NbtLeaf {
     pub fn new(name: impl Into<String>, data: impl Into<NbtLeafData>) -> Self {
         let name = name.into();
-        let id_salt = IdSalt::new(&name);
         let data = data.into();
         Self {
             name,
             data,
-            open: false,
-            id_salt,
         }
     }
 
@@ -214,37 +478,15 @@ impl NbtLeaf {
         self.data = data.into();
     }
 
-    pub fn open(&self) -> bool {
-        self.open
-    }
-
-    pub fn set_open(&mut self, open: bool) {
-        self.open = open;
-    }
-
-    pub fn id_salt(&self) -> IdSalt {
-        self.id_salt
-    }
-
-    pub fn set_id_salt(&mut self, id_salt: IdSalt) {
-        self.id_salt = id_salt;
-    }
-
     // stupid shit that works, sometimes, had to be changed because a previous version would cause the compiler to panic
     fn easy_create_list<T>(v: &[T]) -> Vec<Self> where for<'a> &'a T: Into<NbtLeafData> {
-        v.iter().enumerate().map(|(i, v)| Self::new(i.to_string(), v)).collect()
+        v.iter().enumerate().map(|(i, v)| Self::new(format!("Item {i}"), v)).collect()
     }
 
     // i don't really care what these are called, cuz how tf am i supposed to describe what it does with just a function name
     fn easy_create_list_alt<T, U: Into<NbtLeafData>, F: Fn(&T) -> U>(v: &[T], f: F) -> Vec<Self> {
-        v.iter().enumerate().map(|(i, v)| Self::new(i.to_string(), f(v))).collect()
+        v.iter().enumerate().map(|(i, v)| Self::new(format!("Item {i}"), f(v))).collect()
     }
-
-    // pub fn to_egui_widget(&self) -> Either<CollapsingHeader, TextEdit<'_>> {
-    //     match self.data() {
-    //         NbtLeafData::Byte(v) => TextEdit::singleline(text)
-    //     }
-    // }
 }
 
 /// Is an `NbtLeaf` with more stuff for like styling the whole tree
@@ -302,16 +544,14 @@ impl NbtTree {
     }
 }
 
-// impl Widget for NbtTree {
-//     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-//         (&self).ui(ui)
-//     }
-// }
+impl Widget for NbtTree {
+    fn ui(mut self, ui: &mut egui::Ui) -> egui::Response {
+        (&mut self).ui(ui)
+    }
+}
 
-// impl Widget for &NbtTree {
-//     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-//         let top = self.leaf.ui(ui);
-//
-//         todo!()
-//     }
-// }
+impl Widget for &mut NbtTree {
+    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+        ui.add(EguiInspector::new(&mut self.leaf))
+    }
+}

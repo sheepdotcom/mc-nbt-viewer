@@ -1,12 +1,11 @@
 use std::io::{self, Cursor};
 
-use egui_field_editor::EguiInspector;
 use poll_promise::Promise;
 
 use crate::{decompress_file, nbt::RootTag, parse_nbt_file, tree::NbtTree};
 
 // https://github.com/c-git/egui_file_picker_poll_promise - example used for this, is also why the types are named this way
-type SaveLoadReturn = Option<Cursor<Vec<u8>>>;
+type SaveLoadReturn = Option<(Cursor<Vec<u8>>, String)>;
 type SaveLoadPromise = Promise<SaveLoadReturn>;
 
 #[derive(Default)]
@@ -39,10 +38,10 @@ impl eframe::App for App {
 
             let maybe_data = temp.expect("Promise was in a state of ready and not ready at the same time.").block_and_take();
 
-            if let Some(data) = maybe_data {
+            if let Some((data, name)) = maybe_data {
                 let root_tag = match decompress_file(data) {
-                    Ok(mut v) => parse_nbt_file(&mut v),
-                    Err(mut data) => parse_nbt_file(&mut data),
+                    Ok(mut v) => parse_nbt_file(&mut v, name),
+                    Err(mut data) => parse_nbt_file(&mut data, name),
                 };
 
                 match root_tag {
@@ -75,10 +74,11 @@ impl eframe::App for App {
                         self.save_load_promise = Some(execute(async move {
                             let file = rfd::AsyncFileDialog::new().pick_file().await?;
                             let data = Cursor::new(file.read().await);
+                            let name = file.file_name();
 
                             ctx.request_repaint();
 
-                            Some(data)
+                            Some((data, name))
                         }));
                     }
                     
@@ -94,24 +94,30 @@ impl eframe::App for App {
             });
         });
 
-        egui::CentralPanel::default().show(ui, |ui| {
-            // The central panel the region left after adding TopPanel's and SidePanel's
-            ui.heading("MC NBT Viewer (WIP)");
+        egui::Panel::bottom("bottom_menu").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                powered_by_egui_and_eframe(ui);
+
+                if cfg!(debug_assertions) {
+                    ui.separator();
+                    ui.label(egui::RichText::new("⚠ Debug build ⚠").small().color(ui.visuals().warn_fg_color)).on_hover_text("egui was compiled with debug assertions enabled.");
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::TOP), |ui| {
+                    ui.add(egui::github_link_file!(
+                        "https://github.com/sheepdotcom/mc-nbt-viewer",
+                        "Source code"
+                    ));
+                });
+            });
+        });
+
+        egui::Panel::left("inspector_view").show(ui, |ui| {
+            ui.heading("Inspector View");
             
             if let Some(tree) = &mut self.nbt_tree {
-                // ui.add(tree);
-                ui.add(EguiInspector::new(tree));
+                ui.add(tree);
             }
-
-            ui.add(egui::github_link_file!(
-                "https://github.com/sheepdotcom/mc-nbt-viewer/blob/main/",
-                "Source code."
-            ));
-
-            ui.with_layout(egui::Layout::bottom_up(egui::Align::LEFT), |ui| {
-                powered_by_egui_and_eframe(ui);
-                egui::warn_if_debug_build(ui);
-            });
         });
 
         egui::Window::new("NBT Parsing Error")

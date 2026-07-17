@@ -29,6 +29,6 @@ pub fn decompress_file<R: BufRead>(data: R) -> Result<GzDecoder<R>, R> {
 /// # Errors
 ///
 /// This function will return an error if the provided nbt data is invalid.
-pub fn parse_nbt_file<R: Read>(data: &mut R) -> io::Result<RootTag> {
-    RootTag::from_raw(data)
+pub fn parse_nbt_file<R: Read>(data: &mut R, name: impl Into<String>) -> io::Result<RootTag> {
+    RootTag::from_raw(data, name)
 }
