@@ -1,4 +1,6 @@
-use std::{collections::BTreeMap, fmt::{self, Write}};
+use std::fmt::{self, Write};
+
+use indexmap::IndexMap;
 
 use crate::nbt::{Payload, TagData};
 
@@ -123,7 +125,7 @@ impl<T: Snbt> Snbt for Vec<T> {
     }
 }
 
-impl<T: Snbt, U: Snbt> Snbt for BTreeMap<T, U> {
+impl<T: Snbt, U: Snbt> Snbt for IndexMap<T, U> {
     fn to_snbt<W: Write>(&self, w: &mut W) -> fmt::Result {
         w.write_char('{')?;
 

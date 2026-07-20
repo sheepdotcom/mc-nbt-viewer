@@ -1,6 +1,7 @@
-use std::{collections::BTreeMap, fmt::Display, io::{self, Read}};
+use std::{fmt::Display, io::{self, Read}};
 
 use byteorder_lite::{BigEndian, ReadBytesExt};
+use indexmap::IndexMap;
 
 use crate::snbt::Snbt as _;
 
@@ -97,7 +98,11 @@ impl RootTag {
             TAG_STRING => Payload::String(Self::read_string(data)?),
             TAG_LIST => { // this shit is such a mess (update: even more of a mess)
                 match data.read_u8()? { // tag ID of the list's contents
-                    TAG_END => Payload::EmptyList,
+                    TAG_END => { // finally found the bug! now it actually reads the list length bytes
+                        let mut buf = [0; 4];
+                        data.read_exact(&mut buf)?;
+                        Payload::EmptyList
+                    },
                     TAG_BYTE => Payload::ByteList(Self::read_array(data, ReadBytesExt::read_i8)?),
                     TAG_SHORT => Payload::ShortList(Self::read_array(data, ReadBytesExt::read_i16::<BigEndian>)?),
                     TAG_INT => Payload::IntList(Self::read_array(data, ReadBytesExt::read_i32::<BigEndian>)?),
@@ -123,13 +128,13 @@ impl RootTag {
     fn read_string<R: Read>(data: &mut R) -> io::Result<String> {
         let len = data.read_u16::<BigEndian>()?;
 
-        if len > 0 {
-            let mut buf = vec![0u8; len as usize];
-            data.read_exact(&mut buf)?;
-            Ok(String::from_utf8_lossy(&buf).to_string())
-        } else {
-            Ok(String::new())
+        if len == 0 {
+            return Ok(String::default());
         }
+
+        let mut buf = vec![0u8; len as usize];
+        data.read_exact(&mut buf)?;
+        Ok(String::from_utf8_lossy(&buf).to_string())
     }
 
     /// This method is absolutely stupid, but at least it allows for arrays of any number and string to be parsed,
@@ -138,6 +143,10 @@ impl RootTag {
     /// Doing it this way also feels better because the other way I can think of is a macro and I don't wanna make a macro.
     fn read_array<R: Read, F: Fn(&mut R) -> io::Result<T>, T>(data: &mut R, f: F) -> io::Result<Vec<T>> {
         let len = data.read_u32::<BigEndian>()? as usize;
+
+        if len == 0 {
+            return Ok(Vec::default());
+        }
 
         let mut array = Vec::with_capacity(len);
 
@@ -148,8 +157,8 @@ impl RootTag {
         Ok(array)
     }
 
-    fn read_compound<R: Read>(data: &mut R) -> io::Result<BTreeMap<String, TagData>> {
-        let mut map = BTreeMap::new();
+    fn read_compound<R: Read>(data: &mut R) -> io::Result<IndexMap<String, TagData>> {
+        let mut map = IndexMap::new();
 
         while let Some((name, data)) = Self::read_tag(data)? {
             map.insert(name, data);
@@ -219,7 +228,7 @@ pub enum Payload {
     Float(f32),
     Double(f64),
     String(String),
-    Compound(BTreeMap<String, TagData>),
+    Compound(IndexMap<String, TagData>),
 
     // the basic array types nbt has, whatever
     ByteArray(Vec<i8>),
@@ -239,5 +248,5 @@ pub enum Payload {
     IntArrayList(Vec<Vec<i32>>),
     LongArrayList(Vec<Vec<i64>>),
     ListList(Vec<Self>), // stupidest name but its a list of lists, it holds Self because otherwise there could be infinite enum variants
-    CompoundList(Vec<BTreeMap<String, TagData>>),
+    CompoundList(Vec<IndexMap<String, TagData>>),
 }
