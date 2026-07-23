@@ -1,4 +1,4 @@
-use egui::Widget;
+use egui::{Widget, text::LayoutJob};
 use egui_dnd::DragDropItem;
 use egui_field_editor::{EguiInspect, EguiInspector};
 use indexmap::IndexMap;
@@ -171,6 +171,12 @@ impl From<&IndexMap<String, TagData>> for NbtLeafData {
     }
 }
 
+impl NbtLeafData {
+    fn is_array_type(&self) -> bool {
+        matches!(self, Self::ByteArray(..) | Self::IntArray(..) | Self::LongArray(..) | Self::List(..) | Self::Compound(..))
+    }
+}
+
 /// A copy of the private `egui_field_editor::EnumeratedItem` cuz I need it for thing
 struct EnumeratedItem<T> {
     item: T,
@@ -178,7 +184,7 @@ struct EnumeratedItem<T> {
     salt_id: egui::Id,
 }
 
-impl<T: EguiInspect> DragDropItem for EnumeratedItem<&mut T> {
+impl<T> DragDropItem for EnumeratedItem<&mut T> {
     fn id(&self) -> egui::Id {
         egui::Id::new(self.salt_id.with(self.index))
     }
@@ -188,6 +194,7 @@ impl<T: EguiInspect> DragDropItem for EnumeratedItem<&mut T> {
 pub struct NbtLeaf {
     name: String,
     data: NbtLeafData,
+    name_width: f32,
 }
 
 impl EguiInspect for NbtLeaf {
@@ -195,149 +202,72 @@ impl EguiInspect for NbtLeaf {
         &mut self,
         parent_id: egui::Id,
         _label: &str,
-        tooltip: &str,
-        label_ratio: f32,
-        read_only: bool,
+        _tooltip: &str,
+        _label_ratio: f32,
+        _read_only: bool,
         ui: &mut egui::Ui,
     ) -> egui::Response {
-        self.to_egui_inspect_mut(parent_id, tooltip, label_ratio, read_only, true, true, ui)
+        self.to_egui_inspect_mut(parent_id, true, true, ui)
     }
 }
 
 impl NbtLeaf {
-    /// This function is so insane that it produces three different clippy errors that I gotta ignore otherwise I have to refactor this a bit,
-    /// and right now I already don't like how much I have to mess with it, so I will just ignore the warnings because I have free will
-    #[expect(clippy::too_many_arguments)]
+    fn update_name_width(&mut self, ui: &egui::Ui) {
+        self.name_width = Self::calculate_name_width(self.name.clone(), ui);
+    }
+
+    fn calculate_name_width(text: String, ui: &egui::Ui) -> f32 {
+        let font_id = egui::FontSelection::Default.resolve(ui.style());
+        let color = ui.visuals().override_text_color.unwrap_or_else(|| ui.visuals().widgets.inactive.text_color());
+        let mut job = LayoutJob::simple_singleline(text, font_id, color);
+        job.keep_trailing_whitespace = true;
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
+        galley.rect.width() + 8.0 // add 8 cuz the default x margin is 4 per side
+    }
+
     pub fn to_egui_inspect_mut(
         &mut self,
         parent_id: egui::Id,
-        tooltip: &str,
-        label_ratio: f32,
-        read_only: bool,
         editable_name: bool,
         editable_keys: bool,
         ui: &mut egui::Ui,
     ) -> egui::Response {
         let id = if parent_id == egui::Id::NULL { ui.next_auto_id() } else { parent_id.with(&self.name) };
 
+        if self.name_width.is_infinite() { self.update_name_width(ui); }
+
         ui.vertical(|ui| match &mut self.data {
-            NbtLeafData::Byte(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
-            NbtLeafData::Short(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
-            NbtLeafData::Int(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
-            NbtLeafData::Long(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
-            NbtLeafData::Float(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
-            NbtLeafData::Double(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
-            NbtLeafData::String(v) => v.inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
-            NbtLeafData::ByteArray(v) => v.as_mut_slice().inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
-            NbtLeafData::IntArray(v) => v.as_mut_slice().inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
-            NbtLeafData::LongArray(v) => v.as_mut_slice().inspect_with_custom_id(id, "", tooltip, 0.0, read_only, ui),
-            NbtLeafData::List(v) => Self::inspect_list(v, parent_id, &mut self.name, tooltip, label_ratio, read_only, editable_name, ui),
-            NbtLeafData::Compound(v) => { // copied and slightly modified inspect_with_custom_id from the implementation on HashMap<String, T>
-                let id = if parent_id == egui::Id::NULL { ui.next_auto_id() } else { parent_id.with(&self.name) };
-                let mut changed = false;
-                let data_len = v.len();
-                let mut add_content = |ui: &mut egui::Ui| {
-                    let mut resp = ui.response();
-
-                    for value in v.iter_mut() {
-                        let inner_res = if editable_keys && !matches!(value.data, NbtLeafData::List(..) | NbtLeafData::Compound(..)) {
-                            ui.horizontal_top(|ui| {
-                                ui.add_enabled_ui(!read_only, |ui| {
-                                    let mut te = value.name.clone();
-                                    let res = ui.add_sized([ui.available_width() * label_ratio, 0.0], egui::TextEdit::singleline(&mut te));
-
-                                    if res.changed() && te != value.name {
-                                        value.name = te.clone();
-                                        changed = true;
-                                    }
-
-                                    let value_res = ui.vertical(|ui| {
-                                        value.to_egui_inspect_mut(
-                                            id.with(&value.name),
-                                            tooltip,
-                                            0.0,
-                                            read_only,
-                                            true,
-                                            editable_keys,
-                                            ui
-                                        )
-                                    }).inner;
-
-                                    res.union(value_res)
-                                })
-                            })
-                        } else {
-                            ui.horizontal_top(|ui| {
-                                ui.add_enabled_ui(!read_only, |ui| {
-                                    ui.vertical(|ui| {
-                                        value.to_egui_inspect_mut(
-                                            id.with(&value.name),
-                                            tooltip,
-                                            label_ratio,
-                                            read_only,
-                                            true,
-                                            editable_keys,
-                                            ui
-                                        )
-                                    }).inner
-                                })
-                            })
-                        };
-
-                        resp = resp.union(inner_res.inner.inner);
-                    }
-
-                    resp
-                };
-
-                let mut header_resp = None;
-
-                let content_resp = if !self.name.is_empty() {
-                    let resp = egui::collapsing_header::CollapsingState::load_with_default_open(
-                        ui.ctx(),
-                        id.with("collapse"),
-                        false
-                    ).show_header(ui, |ui| {
-                        if editable_name {
-                            let res = ui.text_edit_singleline(&mut self.name);
-                            res.union(ui.label(format!("[{data_len}]")))
-                        } else {
-                            ui.label(format!("{} [{data_len}]", self.name))
-                        }
-                    }).body(add_content);
-
-                    header_resp = Some(resp.1.inner);
-                    resp.2.map(|v| v.inner)
-                } else {
-                    Some(add_content(ui))
-                };
-
-                let mut final_res = ui.response();
-                if let Some(body_res) = content_resp {
-                    final_res = final_res.union(body_res);
-                }
-                if let Some(head_res) = header_resp {
-                    final_res = final_res.union(head_res);
-                }
-
-                if changed {
-                    final_res.mark_changed();
-                }
-
-                final_res
-            },
+            NbtLeafData::Byte(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
+            NbtLeafData::Short(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
+            NbtLeafData::Int(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
+            NbtLeafData::Long(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
+            NbtLeafData::Float(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
+            NbtLeafData::Double(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
+            NbtLeafData::String(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
+            NbtLeafData::ByteArray(v) => Self::inspect_list(v, |item, id, ui| { // TODO: repetition will probably get replaced in future code change
+                item.item.inspect_with_custom_id(id, &format!("Item {}", item.index), "", 0.0, false, ui)
+            }, parent_id, &mut self.name, self.name_width, editable_name, ui),
+            NbtLeafData::IntArray(v) => Self::inspect_list(v, |item, id, ui| {
+                item.item.inspect_with_custom_id(id, &format!("Item {}", item.index), "", 0.0, false, ui)
+            }, parent_id, &mut self.name, self.name_width, editable_name, ui),
+            NbtLeafData::LongArray(v) => Self::inspect_list(v, |item, id, ui| {
+                item.item.inspect_with_custom_id(id, &format!("Item {}", item.index), "", 0.0, false, ui)
+            }, parent_id, &mut self.name, self.name_width, editable_name, ui),
+            NbtLeafData::List(v) => Self::inspect_list(v, |item, id, ui| {
+                item.item.name = format!("Item {}", item.index);
+                item.item.to_egui_inspect_mut(id, false, true, ui)
+            }, parent_id, &mut self.name, self.name_width, editable_name, ui),
+            NbtLeafData::Compound(v) => Self::inspect_compound(v, parent_id, &mut self.name, self.name_width, editable_name, editable_keys, ui)
         }).inner
     }
     
     // copied and slightly modified inspect_with_custom_id from the implementation on Vec<T>
-    #[expect(clippy::too_many_arguments)]
-    fn inspect_list(
-        v: &mut [Self],
+    fn inspect_list<T, F: Fn(EnumeratedItem<&mut T>, egui::Id, &mut egui::Ui) -> egui::Response>(
+        v: &mut [T],
+        f: F,
         parent_id: egui::Id,
         label: &mut String,
-        tooltip: &str,
-        label_ratio: f32,
-        read_only: bool,
+        label_width: f32,
         editable_name: bool,
         ui: &mut egui::Ui,
     ) -> egui::Response {
@@ -352,7 +282,7 @@ impl NbtLeaf {
             false
         ).show_header(ui, |ui| {
             if editable_name {
-                let res = ui.text_edit_singleline(label);
+                let res = ui.add(egui::TextEdit::singleline(label).desired_width(label_width).clip_text(true).horizontal_align(egui::Align::RIGHT));
                 res.union(ui.label(format!("[{}]", v.len())))
             } else {
                 ui.label(format!("{} [{}]", label, v.len()))
@@ -368,16 +298,7 @@ impl NbtLeaf {
                                 ui.label(if state.dragged { "≡" } else { "☰" });
                             });
 
-                            item.item.name = format!("Item {}", item.index);
-                            let res = item.item.to_egui_inspect_mut(
-                                parent_id_for_children,
-                                tooltip,
-                                label_ratio,
-                                read_only,
-                                false,
-                                true,
-                                ui,
-                            );
+                            let res = f(item, parent_id_for_children, ui);
 
                             if res.changed() {
                                 changed = true;
@@ -404,7 +325,107 @@ impl NbtLeaf {
         }
 
         res
+    }
 
+    // copied and slightly modified inspect_with_custom_id from the implementation on HashMap<String, T>
+    fn inspect_compound(v: &mut [Self], parent_id: egui::Id, label: &mut String, label_width: f32, editable_name: bool, editable_keys: bool, ui: &mut egui::Ui) -> egui::Response {
+        let id = if parent_id == egui::Id::NULL { ui.next_auto_id() } else { parent_id.with(&label) };
+
+        let mut changed = false;
+
+        let data_len = v.len();
+
+        let mut add_content = |ui: &mut egui::Ui| {
+            let mut resp = ui.response();
+
+            for value in v.iter_mut() {
+                let inner_res = if editable_keys && !value.data.is_array_type() {
+                    ui.horizontal_top(|ui| {
+                        ui.add_enabled_ui(true, |ui| {
+                            if value.name_width.is_infinite() { value.update_name_width(ui); }
+
+                            let mut te = value.name.clone();
+
+                            // TextEdit already does this but we need to know it before-hand so we do it ourselves
+                            let child_id = ui.next_auto_id();
+                            ui.skip_ahead_auto_ids(1);
+
+                            // not really the most accurate solution but its better than basically copying (almost) all of TextEdit's event updating code
+                            let width = if ui.memory(|mem| mem.has_focus(child_id)) { value.name_width + 8.0 } else { value.name_width };
+
+                            let text_res = egui::TextEdit::singleline(&mut te).desired_width(width).id(child_id).show(ui);
+                            let res = text_res.response.response;
+
+                            if res.changed() && te != value.name {
+                                value.name = te.clone();
+                                value.name_width = text_res.galley.rect.width() + 8.0;
+                                ui.request_repaint(); // need to repaint so no artifacts appear when typing stuff
+                                changed = true;
+                            }
+
+                            let value_res = ui.vertical(|ui| {
+                                value.to_egui_inspect_mut(id.with(&value.name), true, editable_keys, ui)
+                            }).inner;
+
+                            res.union(value_res)
+                        })
+                    })
+                } else {
+                    ui.horizontal_top(|ui| {
+                        ui.add_enabled_ui(true, |ui| {
+                            ui.vertical(|ui| {
+                                value.to_egui_inspect_mut(
+                                    id.with(&value.name),
+                                    true,
+                                    editable_keys,
+                                    ui
+                                )
+                            }).inner
+                        })
+                    })
+                };
+
+                resp = resp.union(inner_res.inner.inner);
+            }
+
+            resp
+        };
+
+        let mut header_resp = None;
+
+        let content_resp = if !label.is_empty() {
+            let resp = egui::collapsing_header::CollapsingState::load_with_default_open(
+                ui.ctx(),
+                id.with("collapse"),
+                false
+            ).show_header(ui, |ui| {
+                if editable_name {
+                    let res = ui.add(egui::TextEdit::singleline(label).desired_width(label_width).horizontal_align(egui::Align::RIGHT));
+                    res.union(ui.label(format!("[{data_len}]")))
+                } else {
+                    ui.label(format!("{label} [{data_len}]"))
+                }
+            }).body(add_content);
+
+            header_resp = Some(resp.1.inner);
+            resp.2.map(|v| v.inner)
+        } else {
+            Some(add_content(ui))
+        };
+
+        let mut res = ui.response();
+        if let Some(body_res) = content_resp {
+            res = res.union(body_res);
+        }
+        if let Some(head_res) = header_resp {
+            res = res.union(head_res);
+        }
+
+        if changed {
+            res.mark_changed();
+        }
+
+        res
     }
 }
 
@@ -416,11 +437,10 @@ impl From<&RootTag> for NbtLeaf {
 
 impl NbtLeaf {
     pub fn new(name: impl Into<String>, data: impl Into<NbtLeafData>) -> Self {
-        let name = name.into();
-        let data = data.into();
         Self {
-            name,
-            data,
+            name: name.into(),
+            data: data.into(),
+            name_width: f32::INFINITY,
         }
     }
 
@@ -457,9 +477,6 @@ impl NbtLeaf {
 pub struct NbtTree {
     leaf: NbtLeaf, // top leaf, always only one, should be a compound, hopefully...
     enabled: bool,
-    selectable: bool,
-    selected: bool,
-    indented: bool,
 }
 
 impl NbtTree {
@@ -467,10 +484,15 @@ impl NbtTree {
         Self {
             leaf: leaf.into(),
             enabled: true,
-            selectable: false,
-            selected: false,
-            indented: true,
         }
+    }
+
+    pub fn leaf(&self) -> &NbtLeaf {
+        &self.leaf
+    }
+
+    pub fn set_leaf(&mut self, leaf: impl Into<NbtLeaf>) {
+        self.leaf = leaf.into();
     }
 
     pub fn enabled(&self) -> bool {
@@ -479,30 +501,6 @@ impl NbtTree {
 
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
-    }
-
-    pub fn selectable(&self) -> bool {
-        self.selectable
-    }
-
-    pub fn set_selectable(&mut self, selectable: bool) {
-        self.selectable = selectable;
-    }
-
-    pub fn selected(&self) -> bool {
-        self.selected
-    }
-
-    pub fn set_selected(&mut self, selected: bool) {
-        self.selected = selected;
-    }
-
-    pub fn indented(&self) -> bool {
-        self.indented
-    }
-
-    pub fn set_indented(&mut self, indented: bool) {
-        self.indented = indented;
     }
 }
 
