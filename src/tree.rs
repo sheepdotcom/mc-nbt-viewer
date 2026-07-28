@@ -1,9 +1,161 @@
+use std::{num::{IntErrorKind, ParseIntError}, sync::Arc};
+
 use egui::{Widget, text::LayoutJob};
 use egui_dnd::DragDropItem;
-use egui_field_editor::{EguiInspect, EguiInspector};
 use indexmap::IndexMap;
 
 use crate::{RootTag, nbt::{Payload, TagData}};
+
+/// This is a trait, it is here to make my life easier
+pub trait ToEguiLeaf {
+    /// Basically render this type to egui, mainly for `NbtLeaf`, but maybe you will find more uses later
+    fn to_egui_leaf(&mut self, id: egui::Id, ui: &mut egui::Ui, buffer: &mut String, name: &str, name_width: f32) -> egui::Response;
+}
+
+// my first ever macro, simple and kinda copied, but thats how we all start, right?
+macro_rules! to_egui_leaf_int_impl {
+    ($($t:ty)+) => {$(
+        impl ToEguiLeaf for $t {
+            fn to_egui_leaf(&mut self, id: egui::Id, ui: &mut egui::Ui, buffer: &mut String, mut name: &str, name_width: f32) -> egui::Response {
+                ui.horizontal(|ui| {
+                    let spacing_x = ui.spacing().item_spacing.x;
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.add(egui::TextEdit::singleline(&mut name).desired_width(name_width).margin(egui::Margin { left: 4, right: 0, top: 2, bottom: 2 }));
+
+                    let color = ui.visuals().override_text_color.unwrap_or_else(|| ui.visuals().widgets.inactive.text_color());
+                    ui.spacing_mut().item_spacing.x = spacing_x;
+                    ui.add(egui::Label::new(egui::RichText::new(":").color(color)).selectable(false));
+
+                    let res = ui.add(egui::TextEdit::singleline(buffer).id(id));
+
+                    if res.lost_focus() {
+                        *self = buffer.parse().unwrap_or_else(|err: ParseIntError| match err.kind() {
+                            IntErrorKind::PosOverflow => <$t>::MAX,
+                            IntErrorKind::NegOverflow => <$t>::MIN,
+                            IntErrorKind::Empty => <$t>::default(),
+                            _ => *self,
+                        });
+                        *buffer = self.to_string();
+                    }
+
+                    res
+                }).inner
+            }
+        }
+
+        to_egui_leaf_vec_num_impl! { $t }
+    )*}
+}
+
+// even simpler version of the above one
+macro_rules! to_egui_leaf_float_impl {
+    ($($t:ty)+) => {$(
+        impl ToEguiLeaf for $t {
+            fn to_egui_leaf(&mut self, id: egui::Id, ui: &mut egui::Ui, buffer: &mut String, mut name: &str, name_width: f32) -> egui::Response {
+                ui.horizontal(|ui| {
+                    let spacing_x = ui.spacing().item_spacing.x;
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.add(egui::TextEdit::singleline(&mut name).desired_width(name_width).margin(egui::Margin { left: 4, right: 0, top: 2, bottom: 2 }));
+
+                    let color = ui.visuals().override_text_color.unwrap_or_else(|| ui.visuals().widgets.inactive.text_color());
+                    ui.spacing_mut().item_spacing.x = spacing_x;
+                    ui.add(egui::Label::new(egui::RichText::new(":").color(color)).selectable(false));
+
+                    let res = ui.add(egui::TextEdit::singleline(buffer).id(id));
+
+                    if res.lost_focus() {
+                        if let Ok(v) = buffer.parse() { *self = v; }
+                        *buffer = self.to_string();
+                    }
+
+                    res
+                }).inner
+            }
+        }
+
+        to_egui_leaf_vec_num_impl! { $t }
+    )*}
+}
+
+// am I good at naming stuff?
+macro_rules! to_egui_leaf_vec_num_impl {
+    ($t:ty) => {
+        impl ToEguiLeaf for Vec<($t, String)> {
+            fn to_egui_leaf(&mut self, id: egui::Id, ui: &mut egui::Ui, _buffer: &mut String, name: &str, name_width: f32) -> egui::Response {
+                NbtLeaf::inspect_list(self, |item, id, ui| {
+                    let name = format!("Item {}", item.index);
+                    let name_width = NbtLeaf::calculate_name_width(name.clone(), ui);
+                    item.item.0.to_egui_leaf(id.with(item.index), ui, &mut item.item.1, &name, name_width)
+                }, id, name, name_width, ui)
+            }
+        }
+    }
+}
+
+to_egui_leaf_int_impl! { i8 i16 i32 i64 }
+to_egui_leaf_float_impl! { f32 f64 }
+
+impl ToEguiLeaf for String {
+    fn to_egui_leaf(&mut self, id: egui::Id, ui: &mut egui::Ui, buffer: &mut String, mut name: &str, name_width: f32) -> egui::Response {
+        ui.horizontal(|ui| {
+            let spacing_x = ui.spacing().item_spacing.x;
+            ui.spacing_mut().item_spacing.x = 0.0;
+            ui.add(egui::TextEdit::singleline(&mut name).desired_width(name_width).margin(egui::Margin { left: 4, right: 0, top: 2, bottom: 2 }));
+
+            let color = ui.visuals().override_text_color.unwrap_or_else(|| ui.visuals().widgets.inactive.text_color());
+            ui.spacing_mut().item_spacing.x = spacing_x;
+            ui.add(egui::Label::new(egui::RichText::new(":").color(color)).selectable(false));
+
+            let res = ui.add(egui::TextEdit::singleline(buffer).id(id));
+
+            if res.lost_focus() {
+                *self = buffer.to_owned();
+            }
+
+            res
+        }).inner
+    }
+}
+
+impl ToEguiLeaf for NbtLeaf {
+    fn to_egui_leaf(&mut self, id: egui::Id, ui: &mut egui::Ui, _buffer: &mut String, name: &str, name_width: f32) -> egui::Response {
+        let id = if id == egui::Id::NULL { ui.next_auto_id() } else { id.with(&self.name) };
+
+        if !name.is_empty() && self.name != name {
+            self.name = name.to_owned();
+            self.name_width = name_width;
+        }
+
+        if self.name_width.is_infinite() {
+            self.update_name_width(ui);
+        }
+
+        ui.vertical(|ui| match &mut self.data {
+            NbtLeafData::Byte(v) => v.to_egui_leaf(id, ui, &mut self.buffer, &self.name, self.name_width),
+            NbtLeafData::Short(v) => v.to_egui_leaf(id, ui, &mut self.buffer, &self.name, self.name_width),
+            NbtLeafData::Int(v) => v.to_egui_leaf(id, ui, &mut self.buffer, &self.name, self.name_width),
+            NbtLeafData::Long(v) => v.to_egui_leaf(id, ui, &mut self.buffer, &self.name, self.name_width),
+            NbtLeafData::Float(v) => v.to_egui_leaf(id, ui, &mut self.buffer, &self.name, self.name_width),
+            NbtLeafData::Double(v) => v.to_egui_leaf(id, ui, &mut self.buffer, &self.name, self.name_width),
+            NbtLeafData::String(v) => v.to_egui_leaf(id, ui, &mut self.buffer, &self.name, self.name_width),
+            NbtLeafData::ByteArray(v) => v.to_egui_leaf(id, ui, &mut self.buffer, &self.name, self.name_width),
+            NbtLeafData::IntArray(v) => v.to_egui_leaf(id, ui, &mut self.buffer, &self.name, self.name_width),
+            NbtLeafData::LongArray(v) => v.to_egui_leaf(id, ui, &mut self.buffer, &self.name, self.name_width),
+            NbtLeafData::List(v) => v.to_egui_leaf(id, ui, &mut self.buffer, &self.name, self.name_width),
+            NbtLeafData::Compound(v) => Self::inspect_compound(v, id, &self.name, self.name_width, ui)
+        }).inner
+    }
+}
+
+impl ToEguiLeaf for Vec<NbtLeaf> {
+    fn to_egui_leaf(&mut self, id: egui::Id, ui: &mut egui::Ui, _buffer: &mut String, name: &str, name_width: f32) -> egui::Response {
+        NbtLeaf::inspect_list(self, |item, id, ui| {
+            let name = format!("Item {}", item.index);
+            let name_width = NbtLeaf::calculate_name_width(name.clone(), ui);
+            item.item.to_egui_leaf(id, ui, &mut String::new(), &name, name_width)
+        }, id, name, name_width, ui)
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum NbtLeafData {
@@ -14,9 +166,9 @@ pub enum NbtLeafData {
     Float(f32),
     Double(f64),
     String(String),
-    ByteArray(Vec<i8>),
-    IntArray(Vec<i32>),
-    LongArray(Vec<i64>),
+    ByteArray(Vec<(i8, String)>), // the String is for the buffer, TextEdit needs a buffer, and this is the easiest and simplest way
+    IntArray(Vec<(i32, String)>), // compared to Vec<NbtLeaf>, this is still smaller, as it doesn't store the name
+    LongArray(Vec<(i64, String)>),
     List(Vec<NbtLeaf>),
     Compound(Vec<NbtLeaf>),
 }
@@ -127,9 +279,9 @@ impl From<&Payload> for NbtLeafData {
             Payload::Float(v) => v.into(),
             Payload::Double(v) => v.into(),
             Payload::String(v) => v.into(),
-            Payload::ByteArray(v) => Self::ByteArray(v.clone()),
-            Payload::IntArray(v) => Self::IntArray(v.clone()),
-            Payload::LongArray(v) => Self::LongArray(v.clone()),
+            Payload::ByteArray(v) => Self::ByteArray(v.iter().map(|&v| (v, v.to_string())).collect()),
+            Payload::IntArray(v) => Self::IntArray(v.iter().map(|&v| (v, v.to_string())).collect()),
+            Payload::LongArray(v) => Self::LongArray(v.iter().map(|&v| (v, v.to_string())).collect()),
             Payload::EmptyList => Self::List(Vec::new()),
             Payload::ByteList(v) => Self::List(NbtLeaf::easy_create_list(v)),
             Payload::ShortList(v) => Self::List(NbtLeaf::easy_create_list(v)),
@@ -138,9 +290,9 @@ impl From<&Payload> for NbtLeafData {
             Payload::FloatList(v) => Self::List(NbtLeaf::easy_create_list(v)),
             Payload::DoubleList(v) => Self::List(NbtLeaf::easy_create_list(v)),
             Payload::StringList(v) => Self::List(NbtLeaf::easy_create_list(v)),
-            Payload::ByteArrayList(v) => Self::List(NbtLeaf::easy_create_list_with_fn(v, |v| Self::ByteArray(v.clone()))),
-            Payload::IntArrayList(v) => Self::List(NbtLeaf::easy_create_list_with_fn(v, |v| Self::IntArray(v.clone()))),
-            Payload::LongArrayList(v) => Self::List(NbtLeaf::easy_create_list_with_fn(v, |v| Self::LongArray(v.clone()))),
+            Payload::ByteArrayList(v) => Self::List(NbtLeaf::easy_create_list_with_fn(v, |v| Self::ByteArray(v.iter().map(|&v| (v, v.to_string())).collect()))),
+            Payload::IntArrayList(v) => Self::List(NbtLeaf::easy_create_list_with_fn(v, |v| Self::IntArray(v.iter().map(|&v| (v, v.to_string())).collect()))),
+            Payload::LongArrayList(v) => Self::List(NbtLeaf::easy_create_list_with_fn(v, |v| Self::LongArray(v.iter().map(|&v| (v, v.to_string())).collect()))),
             Payload::ListList(v) => Self::List(NbtLeaf::easy_create_list(v)),
             Payload::CompoundList(v) => Self::List(NbtLeaf::easy_create_list(v)),
             Payload::Compound(v) => Self::from(v),
@@ -172,8 +324,18 @@ impl From<&IndexMap<String, TagData>> for NbtLeafData {
 }
 
 impl NbtLeafData {
-    fn is_array_type(&self) -> bool {
-        matches!(self, Self::ByteArray(..) | Self::IntArray(..) | Self::LongArray(..) | Self::List(..) | Self::Compound(..))
+    /// get a string version of the data, but specifically tailored for `NbtLeaf` and its buffer
+    fn get_buffer_string(&self) -> Option<String> {
+        match self {
+            Self::Byte(v) => Some(v.to_string()),
+            Self::Short(v) => Some(v.to_string()),
+            Self::Int(v) => Some(v.to_string()),
+            Self::Long(v) => Some(v.to_string()),
+            Self::Float(v) => Some(v.to_string()),
+            Self::Double(v) => Some(v.to_string()),
+            Self::String(v) => Some(v.to_owned()),
+            _ => None,
+        }
     }
 }
 
@@ -195,20 +357,7 @@ pub struct NbtLeaf {
     name: String,
     data: NbtLeafData,
     name_width: f32,
-}
-
-impl EguiInspect for NbtLeaf {
-    fn inspect_with_custom_id(
-        &mut self,
-        parent_id: egui::Id,
-        _label: &str,
-        _tooltip: &str,
-        _label_ratio: f32,
-        _read_only: bool,
-        ui: &mut egui::Ui,
-    ) -> egui::Response {
-        self.to_egui_inspect_mut(parent_id, true, true, ui)
-    }
+    buffer: String,
 }
 
 impl NbtLeaf {
@@ -217,76 +366,40 @@ impl NbtLeaf {
     }
 
     fn calculate_name_width(text: String, ui: &egui::Ui) -> f32 {
+        Self::get_galley_from_string(text, ui).rect.width() + 4.0
+    }
+
+    fn get_galley_from_string(text: String, ui: &egui::Ui) -> Arc<egui::Galley> {
         let font_id = egui::FontSelection::Default.resolve(ui.style());
         let color = ui.visuals().override_text_color.unwrap_or_else(|| ui.visuals().widgets.inactive.text_color());
         let mut job = LayoutJob::simple_singleline(text, font_id, color);
+        job.halign = egui::Align::LEFT;
         job.keep_trailing_whitespace = true;
-        let galley = ui.fonts_mut(|f| f.layout_job(job));
-        galley.rect.width() + 8.0 // add 8 cuz the default x margin is 4 per side
+        ui.fonts_mut(|f| f.layout_job(job))
     }
 
-    pub fn to_egui_inspect_mut(
-        &mut self,
-        parent_id: egui::Id,
-        editable_name: bool,
-        editable_keys: bool,
-        ui: &mut egui::Ui,
-    ) -> egui::Response {
-        let id = if parent_id == egui::Id::NULL { ui.next_auto_id() } else { parent_id.with(&self.name) };
-
-        if self.name_width.is_infinite() { self.update_name_width(ui); }
-
-        ui.vertical(|ui| match &mut self.data {
-            NbtLeafData::Byte(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
-            NbtLeafData::Short(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
-            NbtLeafData::Int(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
-            NbtLeafData::Long(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
-            NbtLeafData::Float(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
-            NbtLeafData::Double(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
-            NbtLeafData::String(v) => v.inspect_with_custom_id(id, "", "", 0.0, false, ui),
-            NbtLeafData::ByteArray(v) => Self::inspect_list(v, |item, id, ui| { // TODO: repetition will probably get replaced in future code change
-                item.item.inspect_with_custom_id(id, &format!("Item {}", item.index), "", 0.0, false, ui)
-            }, parent_id, &mut self.name, self.name_width, editable_name, ui),
-            NbtLeafData::IntArray(v) => Self::inspect_list(v, |item, id, ui| {
-                item.item.inspect_with_custom_id(id, &format!("Item {}", item.index), "", 0.0, false, ui)
-            }, parent_id, &mut self.name, self.name_width, editable_name, ui),
-            NbtLeafData::LongArray(v) => Self::inspect_list(v, |item, id, ui| {
-                item.item.inspect_with_custom_id(id, &format!("Item {}", item.index), "", 0.0, false, ui)
-            }, parent_id, &mut self.name, self.name_width, editable_name, ui),
-            NbtLeafData::List(v) => Self::inspect_list(v, |item, id, ui| {
-                item.item.name = format!("Item {}", item.index);
-                item.item.to_egui_inspect_mut(id, false, true, ui)
-            }, parent_id, &mut self.name, self.name_width, editable_name, ui),
-            NbtLeafData::Compound(v) => Self::inspect_compound(v, parent_id, &mut self.name, self.name_width, editable_name, editable_keys, ui)
-        }).inner
-    }
-    
     // copied and slightly modified inspect_with_custom_id from the implementation on Vec<T>
     fn inspect_list<T, F: Fn(EnumeratedItem<&mut T>, egui::Id, &mut egui::Ui) -> egui::Response>(
         v: &mut [T],
         f: F,
         parent_id: egui::Id,
-        label: &mut String,
+        label: &str,
         label_width: f32,
-        editable_name: bool,
         ui: &mut egui::Ui,
     ) -> egui::Response {
-        let id = if parent_id == egui::Id::NULL { ui.next_auto_id() } else { parent_id.with(&label) };
+        let id = if parent_id == egui::Id::NULL { ui.next_auto_id() } else { parent_id.with(label) };
         let parent_id_for_children = if parent_id == egui::Id::NULL { egui::Id::NULL } else { id };
 
         let mut changed = false;
+
+        let data_len = v.len();
 
         let collapsing_resp = egui::collapsing_header::CollapsingState::load_with_default_open(
             ui.ctx(),
             id.with("collapse"),
             false
         ).show_header(ui, |ui| {
-            if editable_name {
-                let res = ui.add(egui::TextEdit::singleline(label).desired_width(label_width).clip_text(true).horizontal_align(egui::Align::RIGHT));
-                res.union(ui.label(format!("[{}]", v.len())))
-            } else {
-                ui.label(format!("{} [{}]", label, v.len()))
-            }
+            Self::collection_header(label, label_width, data_len, ui)
         }).body(|ui| {
             let dnd_resp = egui_dnd::dnd(ui, id.with("dnd"))
                 .with_animation_time(0.0)
@@ -328,10 +441,8 @@ impl NbtLeaf {
     }
 
     // copied and slightly modified inspect_with_custom_id from the implementation on HashMap<String, T>
-    fn inspect_compound(v: &mut [Self], parent_id: egui::Id, label: &mut String, label_width: f32, editable_name: bool, editable_keys: bool, ui: &mut egui::Ui) -> egui::Response {
-        let id = if parent_id == egui::Id::NULL { ui.next_auto_id() } else { parent_id.with(&label) };
-
-        let mut changed = false;
+    fn inspect_compound(v: &mut [Self], parent_id: egui::Id, label: &str, label_width: f32, ui: &mut egui::Ui) -> egui::Response {
+        let id = if parent_id == egui::Id::NULL { ui.next_auto_id() } else { parent_id.with(label) };
 
         let data_len = v.len();
 
@@ -339,53 +450,9 @@ impl NbtLeaf {
             let mut resp = ui.response();
 
             for value in v.iter_mut() {
-                let inner_res = if editable_keys && !value.data.is_array_type() {
-                    ui.horizontal_top(|ui| {
-                        ui.add_enabled_ui(true, |ui| {
-                            if value.name_width.is_infinite() { value.update_name_width(ui); }
-
-                            let mut te = value.name.clone();
-
-                            // TextEdit already does this but we need to know it before-hand so we do it ourselves
-                            let child_id = ui.next_auto_id();
-                            ui.skip_ahead_auto_ids(1);
-
-                            // not really the most accurate solution but its better than basically copying (almost) all of TextEdit's event updating code
-                            let width = if ui.memory(|mem| mem.has_focus(child_id)) { value.name_width + 8.0 } else { value.name_width };
-
-                            let text_res = egui::TextEdit::singleline(&mut te).desired_width(width).id(child_id).show(ui);
-                            let res = text_res.response.response;
-
-                            if res.changed() && te != value.name {
-                                value.name = te.clone();
-                                value.name_width = text_res.galley.rect.width() + 8.0;
-                                ui.request_repaint(); // need to repaint so no artifacts appear when typing stuff
-                                changed = true;
-                            }
-
-                            let value_res = ui.vertical(|ui| {
-                                value.to_egui_inspect_mut(id.with(&value.name), true, editable_keys, ui)
-                            }).inner;
-
-                            res.union(value_res)
-                        })
-                    })
-                } else {
-                    ui.horizontal_top(|ui| {
-                        ui.add_enabled_ui(true, |ui| {
-                            ui.vertical(|ui| {
-                                value.to_egui_inspect_mut(
-                                    id.with(&value.name),
-                                    true,
-                                    editable_keys,
-                                    ui
-                                )
-                            }).inner
-                        })
-                    })
-                };
-
-                resp = resp.union(inner_res.inner.inner);
+                resp = resp.union(ui.horizontal_top(|ui| {
+                    value.to_egui_leaf(id.with(&value.name), ui, &mut String::new(), "", f32::INFINITY)
+                }).inner);
             }
 
             resp
@@ -399,12 +466,7 @@ impl NbtLeaf {
                 id.with("collapse"),
                 false
             ).show_header(ui, |ui| {
-                if editable_name {
-                    let res = ui.add(egui::TextEdit::singleline(label).desired_width(label_width).horizontal_align(egui::Align::RIGHT));
-                    res.union(ui.label(format!("[{data_len}]")))
-                } else {
-                    ui.label(format!("{label} [{data_len}]"))
-                }
+                Self::collection_header(label, label_width, data_len, ui)
             }).body(add_content);
 
             header_resp = Some(resp.1.inner);
@@ -421,11 +483,22 @@ impl NbtLeaf {
             res = res.union(head_res);
         }
 
-        if changed {
-            res.mark_changed();
-        }
-
         res
+    }
+
+    fn collection_header(mut label: &str, label_width: f32, data_len: usize, ui: &mut egui::Ui) -> egui::Response {
+        let spacing_x = ui.spacing().item_spacing.x;
+        ui.spacing_mut().item_spacing.x = 0.0;
+
+        let res = ui.add(egui::TextEdit::singleline(&mut label).desired_width(label_width).margin(egui::Margin { left: 0, right: 4, top: 2, bottom: 2 }));
+        
+        ui.spacing_mut().item_spacing.x = spacing_x;
+
+        if data_len == 1 {
+            res.union(ui.add(egui::Label::new("1 entry").selectable(false)))
+        } else {
+            res.union(ui.add(egui::Label::new(format!("{data_len} entries")).selectable(false)))
+        }
     }
 }
 
@@ -437,10 +510,14 @@ impl From<&RootTag> for NbtLeaf {
 
 impl NbtLeaf {
     pub fn new(name: impl Into<String>, data: impl Into<NbtLeafData>) -> Self {
+        let name = name.into();
+        let data = data.into();
+        let buffer = data.get_buffer_string().unwrap_or_default();
         Self {
-            name: name.into(),
-            data: data.into(),
+            name,
+            data,
             name_width: f32::INFINITY,
+            buffer,
         }
     }
 
@@ -458,6 +535,9 @@ impl NbtLeaf {
 
     pub fn set_data(&mut self, data: impl Into<NbtLeafData>) {
         self.data = data.into();
+        if let Some(buf) = self.data.get_buffer_string() {
+            self.buffer = buf;
+        }
     }
 
     // stupid shit that works, sometimes, had to be changed because a previous version would cause the compiler to panic
@@ -473,7 +553,7 @@ impl NbtLeaf {
 
 /// Is an `NbtLeaf` with more stuff for like styling the whole tree
 /// This is meant to be stored in a variable, you save it, its not to be created every single ui re-draw, as it is kinda expensive
-#[derive(Clone, Debug, EguiInspect)]
+#[derive(Clone, Debug)]
 pub struct NbtTree {
     leaf: NbtLeaf, // top leaf, always only one, should be a compound, hopefully...
     enabled: bool,
@@ -512,6 +592,15 @@ impl Widget for NbtTree {
 
 impl Widget for &mut NbtTree {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
-        ui.add(EguiInspector::new(&mut self.leaf))
+        ui.set_min_width(250.0);
+
+        let id = ui.next_auto_id();
+        let available_width = ui.available_width();
+
+        egui::ScrollArea::vertical().id_salt(id.with("scroll")).show(ui, |ui| {
+            ui.set_min_width(available_width);
+
+            self.leaf.to_egui_leaf(id, ui, &mut String::new(), "", f32::INFINITY)
+        }).inner
     }
 }

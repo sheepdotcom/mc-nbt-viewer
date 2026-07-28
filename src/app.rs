@@ -112,7 +112,13 @@ impl eframe::App for App {
             });
         });
 
-        egui::Panel::left("inspector_view").show(ui, |ui| {
+        let min_inspector_width = 250.0;
+
+        // no longer resizable due to a bug with the panel's resizing mechanism
+        // issue was the resize panel edge whatever has a min x as the width of the content, but the panel size rendering doesn't
+        // which causes the panel to render smaller while the resize panel edge whatever would be farther to the right
+        // TODO: custom panel resize so I can have proper resizing without that issue getting in my way
+        egui::Panel::left("inspector_view").min_size(min_inspector_width + 16.0).resizable(false).show(ui, |ui| {
             ui.heading("Inspector View");
             
             if let Some(tree) = &mut self.nbt_tree {
