@@ -1,14 +1,8 @@
 #![warn(clippy::all, rust_2018_idioms)]
 
-mod app;
-pub use app::App;
-
-mod nbt;
-pub use nbt::RootTag;
-
-mod snbt;
-
-mod tree;
+pub mod nbt;
+pub mod snbt;
+pub mod tree;
 
 use std::io::{self, BufRead, Read};
 use flate2::bufread::GzDecoder;
@@ -29,6 +23,6 @@ pub fn decompress_file<R: BufRead>(data: R) -> Result<GzDecoder<R>, R> {
 /// # Errors
 ///
 /// This function will return an error if the provided nbt data is invalid.
-pub fn parse_nbt_file<R: Read>(data: &mut R, name: impl Into<String>) -> io::Result<RootTag> {
-    RootTag::from_raw(data, name)
+pub fn parse_nbt_file<R: Read>(data: &mut R, name: impl Into<String>) -> io::Result<nbt::RootTag> {
+    nbt::RootTag::from_raw(data, name)
 }

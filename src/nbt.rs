@@ -215,6 +215,8 @@ impl TagData {
     }
 }
 
+/// Represents the payload of an NBT object.
+///
 /// `TAG_List` has been split to where there is an enum variant per tag type it can hold
 /// while also being called an array because that just sounds better than calling it a list.
 /// This is mainly there to save on memory, as a `Vec<i8>` is way less than a `Vec<Payload>`,

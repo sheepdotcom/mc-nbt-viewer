@@ -2,7 +2,7 @@ use std::io::{self, Cursor};
 
 use poll_promise::Promise;
 
-use crate::{decompress_file, nbt::RootTag, parse_nbt_file, tree::NbtTree};
+use mc_nbt_viewer::{decompress_file, nbt::RootTag, parse_nbt_file, tree::NbtTree};
 
 // https://github.com/c-git/egui_file_picker_poll_promise - example used for this, is also why the types are named this way
 type SaveLoadReturn = Option<(Cursor<Vec<u8>>, String)>;
@@ -136,6 +136,18 @@ impl eframe::App for App {
                     ui.label("Unknown");
                 }
             });
+
+        #[cfg(target_arch = "wasm32")]
+        if crate::UPDATE_FLAG.load(std::sync::atomic::Ordering::Relaxed)
+            && egui::Modal::new("update".into())
+                .show(ui.ctx(), |ui| {
+                    ui.heading("Update Available");
+                    ui.label("An updated version has been found, refresh to get it(?).");
+                    ui.label("// TODO: Test if refreshing works, and if you have to close ALL instances or only refresh the current one");
+                    ui.vertical_centered_justified(|ui| ui.button("Close").clicked()).inner
+                }).inner {
+            crate::set_update_flag(false);
+        }
     }
 }
 

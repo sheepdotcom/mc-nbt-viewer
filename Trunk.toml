@@ -1,2 +1,8 @@
 [build]
+minify = "on_release"
 filehash = false
+
+[[hooks]]
+stage = "post_build"
+command = "bash"
+command_arguments = [ "assets/generate_sw.sh" ]

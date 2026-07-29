@@ -1999,6 +1999,7 @@ dependencies = [
  "rfd",
  "serde_json",
  "tokio",
+ "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
 ]

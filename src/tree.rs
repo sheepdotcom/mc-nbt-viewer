@@ -4,7 +4,7 @@ use egui::{Widget, text::LayoutJob};
 use egui_dnd::DragDropItem;
 use indexmap::IndexMap;
 
-use crate::{RootTag, nbt::{Payload, TagData}};
+use crate::{nbt::{Payload, RootTag, TagData}};
 
 /// This is a trait, it is here to make my life easier
 pub trait ToEguiLeaf {

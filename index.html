@@ -9,8 +9,8 @@
     <!-- change this to your project name -->
     <title>MC NBT Viewer</title>
 
-    <!-- config for our rust wasm binary. go to https://trunkrs.dev/assets/#rust for more customization -->
-    <link data-trunk rel="rust" data-wasm-opt="2" />
+    <!-- config for our rust wasm binary. go to https://trunk-rs.github.io/trunk/guide/assets/#rust for more customization -->
+    <link data-trunk rel="rust" data-wasm-opt="2" data-initializer="assets/initializer.js" />
     <!-- this is the base url relative to which other urls will be constructed. trunk will insert this from the public-url option -->
     <base data-trunk-public-url />
 
@@ -18,6 +18,7 @@
 
 
     <link data-trunk rel="copy-file" href="assets/sw.js"/>
+	<link data-trunk rel="copy-file" href="assets/initializer.js"/>
     <link data-trunk rel="copy-file" href="assets/manifest.json"/>
     <link data-trunk rel="copy-file" href="assets/favicon-192x192.png" data-target-path="assets"/>
     <link data-trunk rel="copy-file" href="assets/favicon-512x512.png" data-target-path="assets"/>
@@ -123,9 +124,9 @@
     <canvas id="the_canvas_id"></canvas>
 
     <!-- the loading spinner will be removed in main.rs -->
-    <div class="centered" id="loading_text">
+    <div class="centered" id="loading">
         <noscript>You need javascript to use this website</noscript>
-        <p style="font-size:16px">
+        <p style="font-size:16px" id="loading_text">
             Loading…
         </p>
         <div class="lds-dual-ring"></div>
@@ -134,12 +135,52 @@
     <!--Register Service Worker. this will cache the wasm / js scripts for offline use (for PWA functionality). -->
     <!-- Force refresh (Ctrl + F5) to load the latest files instead of cached files  -->
     <script>
-        // We disable caching during development so that we always view the latest version.
-        if ('serviceWorker' in navigator && window.location.hash !== "#dev") {
-            window.addEventListener('load', function () {
-                navigator.serviceWorker.register('sw.js');
-            });
-        }
+        const UPDATE_KEY = "update";
+		let loaded = false;
+
+		import * as bindings from "./mc_nbt_viewer.js";
+
+		localStorage.removeItem(UPDATE_KEY);
+
+		function check_pending_update_flag() {
+			if (localStorage.getItem(UPDATE_KEY) === "true") {
+				bindings.set_update_flag(true);
+				localStorage.removeItem(UPDATE_KEY);
+			}
+		}
+
+		addEventListener("TrunkApplicationStarted", (event) => {
+			loaded = true;
+			check_pending_update_flag();
+		});
+
+		if ("serviceWorker" in navigator) {
+			window.addEventListener("load", () => {
+				navigator.serviceWorker.register("sw.js").then(registration => {
+					registration.onupdatefound = () => {
+						if (loaded) {
+							check_pending_update_flag();
+						} else {
+							localStorage.setItem(UPDATE_KEY, "true");
+						}
+
+						const newWorker = registration.installing;
+
+						newWorker.onerror = (error) => {
+							console.error("Service Worker installation failed: ", error);
+						};
+
+						newWorker.onstatechange = () => {
+							if (newWorker.state === "installed") {
+								if (!navigator.serviceWorker.controller) {
+									localStorage.removeItem(UPDATE_KEY);
+								}
+							}
+						};
+					};
+				});
+			});
+		}
     </script>
 </body>
 

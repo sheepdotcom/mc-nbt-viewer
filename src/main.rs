@@ -1,7 +1,8 @@
 #![warn(clippy::all, rust_2018_idioms)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")] // hide console window on Windows in release
 
-use mc_nbt_viewer::App;
+mod app;
+use app::App;
 
 // When compiling natively:
 #[cfg(not(target_arch = "wasm32"))]
@@ -31,6 +32,15 @@ async fn main() -> eframe::Result {
 
 // When compiling to web using trunk:
 #[cfg(target_arch = "wasm32")]
+static UPDATE_FLAG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn set_update_flag(value: bool) {
+    UPDATE_FLAG.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(target_arch = "wasm32")]
 fn main() {
     use eframe::wasm_bindgen::JsCast as _;
 
@@ -40,12 +50,10 @@ fn main() {
     let web_options = eframe::WebOptions::default();
 
     wasm_bindgen_futures::spawn_local(async {
-        let document = web_sys::window()
+        let canvas = web_sys::window()
             .expect("No window")
             .document()
-            .expect("No document");
-
-        let canvas = document
+            .expect("No document")
             .get_element_by_id("the_canvas_id")
             .expect("Failed to find the_canvas_id")
             .dyn_into::<web_sys::HtmlCanvasElement>()
@@ -59,19 +67,9 @@ fn main() {
             )
             .await;
 
-        // Remove the loading text and spinner:
-        if let Some(loading_text) = document.get_element_by_id("loading_text") {
-            match start_result {
-                Ok(_) => {
-                    loading_text.remove();
-                }
-                Err(e) => {
-                    loading_text.set_inner_html(
-                        "<p> The app has crashed. See the developer console for details. </p>",
-                    );
-                    panic!("Failed to start eframe: {e:?}");
-                }
-            }
+        match start_result {
+            Ok(_) => log::info!("App started successfully"),
+            Err(e) => log::error!("App failed to start: {e:?}"),
         }
     });
 }

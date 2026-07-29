@@ -10,6 +10,10 @@ pub trait Snbt {
     /// Can be used on any type implementing `std::fmt::Write`, appending its data rather than overwriting.
     /// If you just want the SNBT data, consider creating a new `String` object and passing that in.
     /// Also takes a bool for whether it should print pretty text or not (where compounds will be spaced across multiple lines)
+    ///
+    /// # Errors 
+    ///
+    /// Will return an error if the type's `Display` implementation returns an error, which shouldn't happen
     fn to_snbt<W: Write>(&self, w: &mut W) -> fmt::Result;
 }
 
