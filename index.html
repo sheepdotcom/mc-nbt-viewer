@@ -1,0 +1,75 @@
+<!doctype html><meta content="text/html; charset=utf-8" http-equiv=Content-Type><meta content="width=device-width,initial-scale=1.0,user-scalable=no" name=viewport><title>MC NBT Viewer</title><script type=module>async function __trunkInitializer(init, source, sourceSize, initializer, initWithObject) {
+  if (initializer === undefined) {
+    return await init(initWithObject ? { module_or_path: source } : source);
+  }
+
+  const {
+    onStart, onProgress, onComplete, onSuccess, onFailure
+  } = initializer;
+
+  onStart?.();
+
+  const response = fetch(source)
+      .then((response) => {
+        const reader = response.body.getReader();
+        const headers = response.headers;
+        const status = response.status;
+        const statusText = response.statusText;
+
+        const total = sourceSize;
+        let current = 0;
+
+        const stream = new ReadableStream({
+          start(controller) {
+            function push() {
+              reader.read().then(({done, value}) => {
+                if (done) {
+                  onProgress?.({current: total, total});
+                  controller.close();
+                  return;
+                }
+
+                current += value.byteLength;
+                onProgress?.({current, total});
+                controller.enqueue(value);
+                push();
+              });
+            }
+
+            push();
+          },
+        });
+
+        return {
+          stream, init: {
+            headers, status, statusText
+          }
+        };
+      })
+      .then(({stream, init}) =>
+          new Response(stream, init),
+      );
+
+  return init(initWithObject ? { module_or_path: response } : response)
+      .then((value) => {
+        onComplete?.();
+        onSuccess?.(value);
+        return value;
+      }, (reason) => {
+        onComplete?.();
+        onFailure?.(reason);
+        return reason;
+      });
+}
+
+
+import init, * as bindings from 'https://sheepdotcom.github.io/mc-nbt-viewer/mc_nbt_viewer.js';
+import initializer from 'https://sheepdotcom.github.io/mc-nbt-viewer/initializer.js';
+
+const wasm = await __trunkInitializer(init, 'https://sheepdotcom.github.io/mc-nbt-viewer/mc_nbt_viewer_bg.wasm', 10168007, initializer(), true);
+
+
+window.wasmBindings = bindings;
+
+
+dispatchEvent(new CustomEvent("TrunkApplicationStarted", {detail: {wasm}}));</script><base href=https://sheepdotcom.github.io/mc-nbt-viewer/><link href=https://sheepdotcom.github.io/mc-nbt-viewer/favicon.ico integrity=sha384-H/sMllKx3oRVji7dIGR2TCCETwjCqXOIm90neNv6wtMTQzSBGDF3c1bDT4V6Mkdc rel=icon><link href=manifest.json rel=manifest><link href=assets/apple-touch-icon.png rel=apple-touch-icon><meta media="(prefers-color-scheme: light)" content=white name=theme-color><meta media="(prefers-color-scheme: dark)" content=#404040 name=theme-color><style>html{touch-action:manipulation}body{background:#909090}@media (prefers-color-scheme:dark){body{background:#404040}}html,body{width:100%;height:100%;overflow:hidden;margin:0!important;padding:0!important}canvas{width:100%;height:100%;margin-left:auto;margin-right:auto;display:block;position:absolute;top:0;left:0}.centered{color:#f0f0f0;text-align:center;margin-left:auto;margin-right:auto;font-family:Ubuntu-Light,Helvetica,sans-serif;font-size:24px;display:block;position:absolute;top:50%;left:50%;transform:translate(-50%,-50%)}.lds-dual-ring{width:24px;height:24px;display:inline-block}.lds-dual-ring:after{content:" ";border:3px solid #fff;border-color:#fff #0000;border-radius:50%;width:24px;height:24px;margin:0;animation:1.2s linear infinite lds-dual-ring;display:block}@keyframes lds-dual-ring{0%{transform:rotate(0)}to{transform:rotate(360deg)}}</style><link crossorigin href=https://sheepdotcom.github.io/mc-nbt-viewer/mc_nbt_viewer.js integrity=sha384-LJnlA242JIPbP1wSmw9/hp53Mp1hvMR237b8pjA2A3rDZvyBHfLZffTYVcT6FDUx rel=modulepreload><link crossorigin href=https://sheepdotcom.github.io/mc-nbt-viewer/initializer.js integrity=sha384-fFuwc3K1s7c/Zv2ZnJPA4oEczwFr3CXeETzebi8rKBrus34Zpr4Fohe5zp9WCFw4 rel=modulepreload><link as=fetch crossorigin href=https://sheepdotcom.github.io/mc-nbt-viewer/mc_nbt_viewer_bg.wasm integrity=sha384-gMp4zglye7E3cT0b3ybB8/0soENc9Y2pdJ1Y6YAnY9BAAubsIaCbes920b+LvWGL rel=preload type=application/wasm></head><body><canvas id=the_canvas_id></canvas><div class=centered id=loading><noscript>You need javascript to use this website</noscript><p id=loading_text style=font-size:16px>Loading…</p><div class=lds-dual-ring></div></div><script>var check_pending_update_flag=(()=>{if(localStorage.getItem(UPDATE_KEY)===`true`){a.set_update_flag(!0);localStorage.removeItem(UPDATE_KEY)}});const UPDATE_KEY=`update`;let loaded=!1;import*as a from"./mc_nbt_viewer.js";localStorage.removeItem(UPDATE_KEY);addEventListener(`TrunkApplicationStarted`,a=>{loaded=!0;check_pending_update_flag()});if(`serviceWorker` in navigator){window.addEventListener(`load`,()=>{navigator.serviceWorker.register(`sw.js`).then(a=>{a.onupdatefound=()=>{if(loaded){check_pending_update_flag()}else{localStorage.setItem(UPDATE_KEY,`true`)};const b=a.installing;b.onerror=a=>{console.error(`Service Worker installation failed: `,a)};b.onstatechange=()=>{if(b.state===`installed`){if(!navigator.serviceWorker.controller){localStorage.removeItem(UPDATE_KEY)}}}}})})}</script></body></html>
