@@ -24,7 +24,7 @@ async fn main() -> eframe::Result {
         ..Default::default()
     };
     eframe::run_native(
-        "mc nbt viewer",
+        "mc_nbt_viewer",
         native_options,
         Box::new(|cc| Ok(Box::new(App::new(cc)))),
     )

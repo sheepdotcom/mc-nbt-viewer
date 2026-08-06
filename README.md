@@ -13,9 +13,10 @@ Will fix soon probably
 
 ## What needs to be done
 
-- [ ] Fix caching problems (top priority)
-- [ ] Bring back panel resizing (second)
-- [ ] Embed a 3d renderer into the gui (after above maybe)
+- [x] Fix caching problems (may need more work)
+- [ ] Bring back panel resizing (nah not right now)
+- [ ] Project restructure
+- [x] Embed a 3d renderer into the gui (has begun)
   - [ ] Render cube
   - [ ] Camera movement/rotation
   - [ ] Render textures onto cubes

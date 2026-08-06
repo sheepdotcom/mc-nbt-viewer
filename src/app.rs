@@ -2,7 +2,7 @@ use std::io::{self, Cursor};
 
 use poll_promise::Promise;
 
-use mc_nbt_viewer::{decompress_file, nbt::RootTag, parse_nbt_file, tree::NbtTree};
+use mc_nbt_viewer::{decompress_file, nbt::RootTag, parse_nbt_file, tree::NbtTree, world::World};
 
 // https://github.com/c-git/egui_file_picker_poll_promise - example used for this, is also why the types are named this way
 type SaveLoadReturn = Option<(Cursor<Vec<u8>>, String)>;
@@ -59,7 +59,7 @@ impl eframe::App for App {
     }
 
     /// Called each time the UI needs repainting, which may be many times per second.
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         // Put your widgets into a `SidePanel`, `TopBottomPanel`, `CentralPanel`, `Window` or `Area`.
         // For inspiration and more examples, go to https://emilk.github.io/egui
 
@@ -83,7 +83,7 @@ impl eframe::App for App {
                     }
                     
                     // NOTE: no File->Quit on web pages!
-                    if !cfg!(target_arch = "wasm32") && ui.button("Quit").clicked() {
+                    if !frame.is_web() && ui.button("Quit").clicked() {
                         ui.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                 });
@@ -124,6 +124,25 @@ impl eframe::App for App {
             if let Some(tree) = &mut self.nbt_tree {
                 ui.add(tree);
             }
+        });
+
+        let min_world_width = 250.0;
+
+        egui::Panel::right("world_view").min_size(min_world_width + 16.0).resizable(false).show(ui, |ui| {
+            ui.heading("World View (?)");
+
+            // I just learn't you can use else statements in a let statement on an enum, this is crazy
+            let Some(render_state) = frame.wgpu_render_state() else {
+                return;
+            };
+
+            let world = World::new(render_state, 100, 100);
+
+            world.render();
+
+            ui.add(egui::Image::from_texture(world.get_sized_texture()));
+
+            // TODO: draw a triangle or a cube
         });
 
         egui::Window::new("NBT Parsing Error")

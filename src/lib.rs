@@ -3,6 +3,7 @@
 pub mod nbt;
 pub mod snbt;
 pub mod tree;
+pub mod world;
 
 use std::io::{self, BufRead, Read};
 use flate2::bufread::GzDecoder;
